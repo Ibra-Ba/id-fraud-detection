@@ -3,22 +3,22 @@ exclude: "^(idnet/|\\.venv/|data/raw/|data/processed/|mlruns/)"
 repos:
   # ─── Formatage : Black ────────────────────────────────────────────────────
   - repo: https://github.com/psf/black
-    rev: 26.3.1
+    rev: 26.3.0
     hooks:
       - id: black
-        language_version: python3.10.12
+        language_version: python3.10
         args: ["--line-length", "100"]
 
   # ─── Linter : Ruff ───────────────────────────────────────────────────────
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.6
+    rev: v0.15.5
     hooks:
       - id: ruff
         args: ["--fix", "--line-length", "100"]
 
   # ─── Vérifications générales ─────────────────────────────────────────────
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
+    rev: v5.0.0
     hooks:
       - id: trailing-whitespace       # supprime espaces en fin de ligne
       - id: end-of-file-fixer         # assure newline en fin de fichier
@@ -34,7 +34,7 @@ repos:
 
   # ─── Commits conventionnels ──────────────────────────────────────────────
   - repo: https://github.com/compilerla/conventional-pre-commit
-    rev: v4.4.0
+    rev: v3.2.0
     hooks:
       - id: conventional-pre-commit
         stages: [commit-msg]
