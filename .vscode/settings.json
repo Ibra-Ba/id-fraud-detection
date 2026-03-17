@@ -1,0 +1,64 @@
+{
+  // ─── Python ────────────────────────────────────────────────────────────────
+  "python.defaultInterpreterPath": "/home/ibraba/id-fraud-detector/idnet/bin/python3",
+  "python.terminal.activateEnvironment": true,
+
+  // ─── Formatage : Black ─────────────────────────────────────────────────────
+  "editor.formatOnSave": true,
+  "editor.defaultFormatter": "ms-python.black-formatter",
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  "black-formatter.args": ["--line-length", "100"],
+
+  // ─── Linter : Ruff ─────────────────────────────────────────────────────────
+"ruff.enable": true,
+"editor.codeActionsOnSave": {
+  "source.fixAll.ruff": "explicit",
+  "source.organizeImports.ruff": "explicit"
+},
+
+  // ─── Tests : Pytest ────────────────────────────────────────────────────────
+  "python.testing.pytestEnabled": true,
+  "python.testing.pytestArgs": ["tests"],
+  "python.testing.unittestEnabled": false,
+
+  // ─── WSL2 : forcer les fins de ligne Linux ─────────────────────────────────
+  "files.eol": "\n",
+
+  // ─── Fichiers à exclure de l'explorateur ───────────────────────────────────
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.pyc": true,
+    "**/.pytest_cache": true,
+    "**/htmlcov": true,
+    "**/.ruff_cache": true,
+    "**/mlruns": true,
+    "data/raw": true
+  },
+
+  // ─── Docker ────────────────────────────────────────────────────────────────
+  "docker.environment": {
+    "DOCKER_HOST": "unix:///var/run/docker.sock"
+  },
+
+  // ─── GitHub Actions ────────────────────────────────────────────────────────
+  "github-actions.workflows.pinned.workflows": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/cd.yml"
+  ],
+
+  // ─── Editeur général ───────────────────────────────────────────────────────
+  "editor.rulers": [100],
+  "editor.tabSize": 4,
+  "editor.insertSpaces": true,
+  "editor.trimAutoWhitespace": true,
+  "files.trimTrailingWhitespace": true,
+  "containers.environment": {
+    "DOCKER_HOST": "unix:///var/run/docker.sock"
+  }
+}

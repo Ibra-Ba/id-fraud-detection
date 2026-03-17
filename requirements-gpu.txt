@@ -1,0 +1,6 @@
+# ─── PyTorch GPU (CUDA 11.8) ──────────────────────────────────────────────────
+# Usage : pip install -r requirements-gpu.txt
+# Utilisé sur : machine avec GPU CUDA
+--index-url https://download.pytorch.org/whl/cu118
+torch==2.2.0
+torchvision==0.17.0

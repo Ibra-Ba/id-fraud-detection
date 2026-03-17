@@ -1,0 +1,13 @@
+# Chaque PR modifiant ces fichiers nécessite une review explicite
+
+# Modèle ML — review obligatoire
+src/models/          @ml-lead
+src/data/            @ml-lead
+
+# CI/CD — review obligatoire
+.github/workflows/   @devops-lead
+
+# Config critique
+.pre-commit-config.yaml  @ml-lead @devops-lead
+docker-compose.yml       @devops-lead
+requirements.txt         @ml-lead

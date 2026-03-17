@@ -1,0 +1,3 @@
+[submodule "mlflow-remote-server"]
+	path = mlflow-remote-server
+	url = https://huggingface.co/spaces/VoxUp/mlflow-remote-server

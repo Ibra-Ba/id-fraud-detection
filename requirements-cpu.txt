@@ -1,0 +1,6 @@
+# ─── PyTorch CPU uniquement ───────────────────────────────────────────────────
+# Usage : pip install -r requirements-cpu.txt
+# Utilisé sur : WSL2 dev, GitHub Actions CI
+--index-url https://download.pytorch.org/whl/cpu
+torch==2.2.0
+torchvision==0.17.0

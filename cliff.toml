@@ -1,0 +1,39 @@
+# git-cliff configuration — génère le CHANGELOG depuis les commits conventionnels
+
+[changelog]
+header = """
+# Changelog\n
+Toutes les modifications notables sont documentées ici.\n
+"""
+body = """
+{% if version %}\
+## [{{ version | trim_start_matches(pat="v") }}] — {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}\
+## [Unreleased]
+{% endif %}\
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {{ commit.message | upper_first }} ([{{ commit.id | truncate(length=7, end="") }}]({{ commit.github.contributors[0].url }}))\
+{% endfor %}
+{% endfor %}\n
+"""
+footer = ""
+trim = true
+
+[git]
+conventional_commits = true
+filter_unconventional = true
+commit_parsers = [
+  { message = "^feat",     group = "✨ Features"    },
+  { message = "^fix",      group = "🐛 Bug Fixes"   },
+  { message = "^model",    group = "🤖 Model"       },
+  { message = "^data",     group = "📦 Data"        },
+  { message = "^ci",       group = "⚙️ CI/CD"       },
+  { message = "^docs",     group = "📝 Docs"        },
+  { message = "^test",     group = "🧪 Tests"       },
+  { message = "^refactor", group = "♻️ Refactor"    },
+  { message = "^chore",    group = "🔧 Chore"       },
+]
+filter_commits = false
+tag_pattern = "v[0-9].*"
