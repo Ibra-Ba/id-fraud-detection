@@ -20,6 +20,8 @@ from sklearn.metrics import (
     f1_score,
     roc_auc_score,
 )
+from torch.utils.data import DataLoader
+
 from src.models.config import (
     BATCH_SIZE,
     DEVICE,  # ← importé depuis config.py, plus d'erreur Pylance
@@ -27,8 +29,6 @@ from src.models.config import (
     MIN_F1,
     PROCESSED_DIR,
 )
-from torch.utils.data import DataLoader
-
 from src.models.train import VAL_TF, IDNetDataset
 
 
