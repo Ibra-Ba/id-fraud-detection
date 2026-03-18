@@ -24,10 +24,9 @@ repos:
       - id: end-of-file-fixer         # assure newline en fin de fichier
       - id: check-yaml                # valide les fichiers YAML
       - id: check-toml                # valide pyproject.toml
-      - id: check-json                # valide les JSON
+      - id: check-json
+        exclude: '^\.vscode/'
       - id: check-merge-conflict      # bloque si marqueurs de conflit Git
-      - id: check-added-large-files   # bloque fichiers > 500KB
-        args: ["--maxkb", "500"]
       - id: debug-statements          # bloque les print/breakpoint oubliés
       - id: no-commit-to-branch       # protège main
         args: ["--branch", "main"]

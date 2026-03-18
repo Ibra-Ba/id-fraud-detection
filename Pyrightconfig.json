@@ -1,0 +1,17 @@
+{
+  "pythonVersion": "3.10",
+  "pythonPlatform": "Linux",
+  "venvPath": ".",
+  "venv": "idnet",
+  "include": ["src", "tests"],
+  "exclude": [
+    "idnet",
+    "data",
+    "mlruns",
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*"
+  ],
+  "reportMissingImports": true,
+  "reportMissingModuleSource": false
+}

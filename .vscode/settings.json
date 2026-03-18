@@ -3,6 +3,11 @@
   "python.defaultInterpreterPath": "/home/ibraba/id-fraud-detector/idnet/bin/python3",
   "python.terminal.activateEnvironment": true,
 
+  // ─── Pylance — résolution des imports src/ ─────────────────────────────────
+  "python.analysis.extraPaths": ["/home/ibraba/id-fraud-detector/idnet/bin/python3"],
+  "python.analysis.autoSearchPaths": true,
+  "python.analysis.useLibraryCodeForTypes": true,
+
   // ─── Formatage : Black ─────────────────────────────────────────────────────
   "editor.formatOnSave": true,
   "editor.defaultFormatter": "ms-python.black-formatter",
@@ -16,11 +21,10 @@
   "black-formatter.args": ["--line-length", "100"],
 
   // ─── Linter : Ruff ─────────────────────────────────────────────────────────
-"ruff.enable": true,
-"editor.codeActionsOnSave": {
-  "source.fixAll.ruff": "explicit",
-  "source.organizeImports.ruff": "explicit"
-},
+  "ruff.enable": true,
+  "ruff.lineLength": 100,
+  "ruff.fixAll": true,
+  "ruff.organizeImports": true,
 
   // ─── Tests : Pytest ────────────────────────────────────────────────────────
   "python.testing.pytestEnabled": true,
@@ -57,8 +61,5 @@
   "editor.tabSize": 4,
   "editor.insertSpaces": true,
   "editor.trimAutoWhitespace": true,
-  "files.trimTrailingWhitespace": true,
-  "containers.environment": {
-    "DOCKER_HOST": "unix:///var/run/docker.sock"
-  }
+  "files.trimTrailingWhitespace": true
 }

@@ -6,7 +6,6 @@ Tout est loggué dans MLflow.
 
 import os
 import sys
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import mlflow
@@ -21,13 +20,16 @@ from sklearn.metrics import (
     f1_score,
     roc_auc_score,
 )
+from src.models.config import (
+    BATCH_SIZE,
+    DEVICE,  # ← importé depuis config.py, plus d'erreur Pylance
+    MIN_AUROC,
+    MIN_F1,
+    PROCESSED_DIR,
+)
 from torch.utils.data import DataLoader
 
-from src.models.train import IDNetDataset, VAL_TF, BATCH_SIZE, DEVICE
-
-PROCESSED_DIR = Path(os.getenv("DATA_PROCESSED_DIR", "data/processed"))
-MIN_AUROC = float(os.getenv("MIN_AUROC", 0.90))
-MIN_F1 = float(os.getenv("MIN_F1", 0.85))
+from src.models.train import VAL_TF, IDNetDataset
 
 
 def evaluate(run_id: str) -> dict:
@@ -35,7 +37,9 @@ def evaluate(run_id: str) -> dict:
     Évalue le modèle du run MLflow donné sur le test set.
     Retourne les métriques et logue tout dans MLflow.
     """
-    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
+    # ── Fix erreur 2 : valeur par défaut garantie non-None ───────────────────
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+    mlflow.set_tracking_uri(tracking_uri)
 
     # ── Charger le modèle depuis MLflow ──────────────────────────────────────
     model_uri = f"runs:/{run_id}/model"
@@ -51,16 +55,18 @@ def evaluate(run_id: str) -> dict:
         num_workers=0,
     )
 
-    all_labels, all_probs = [], []
+    all_labels: list[int] = []
+    all_probs: list[float] = []
+
     with torch.no_grad():
         for images, labels in test_dl:
             probs = torch.softmax(model(images), dim=1)[:, 1].numpy()
-            all_probs.extend(probs)
-            all_labels.extend(labels.numpy())
+            all_probs.extend(probs.tolist())  # ← float Python natif
+            all_labels.extend(labels.numpy().tolist())
 
     all_preds = (np.array(all_probs) >= 0.5).astype(int)
-    auroc = roc_auc_score(all_labels, all_probs)
-    f1 = f1_score(all_labels, all_preds)
+    auroc = float(roc_auc_score(all_labels, all_probs))  # ← cast float
+    f1 = float(f1_score(all_labels, all_preds))  # ← cast float
 
     # ── Rapport console ───────────────────────────────────────────────────────
     print("\n" + "─" * 50)
@@ -69,8 +75,16 @@ def evaluate(run_id: str) -> dict:
     print("─" * 50)
 
     # ── Log MLflow ────────────────────────────────────────────────────────────
+    passed = auroc >= MIN_AUROC and f1 >= MIN_F1
+
     with mlflow.start_run(run_id=run_id):
-        mlflow.log_metrics({"test_auroc": auroc, "test_f1": f1})
+        # ── Fix erreur 3 : cast explicite float sur toutes les métriques ─────
+        mlflow.log_metrics(
+            {
+                "test_auroc": float(auroc),
+                "test_f1": float(f1),
+            }
+        )
 
         # Matrice de confusion
         cm = confusion_matrix(all_labels, all_preds)
@@ -87,8 +101,6 @@ def evaluate(run_id: str) -> dict:
         mlflow.log_figure(fig, "roc_curve.png")
         plt.close()
 
-        # Quality gate final
-        passed = auroc >= MIN_AUROC and f1 >= MIN_F1
         mlflow.set_tag("test_quality_gate", "PASSED" if passed else "FAILED")
 
     # ── Quality gate ──────────────────────────────────────────────────────────
