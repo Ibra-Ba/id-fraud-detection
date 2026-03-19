@@ -77,3 +77,4 @@ Requirements-gpu.txt
 idnet/
 __pycache__/
 *.pyc
+coverage.xml
