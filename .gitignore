@@ -72,9 +72,17 @@ desktop.ini
 *.log
 logs/
 airflow/logs/
+mlruns/
+
 # Requirements-GPU
 Requirements-gpu.txt
 idnet/
 __pycache__/
 *.pyc
 coverage.xml
+
+# Great Expectations
+great_expectations/uncommitted/
+great_expectations/expectations/.ge_store_backend_id
+great_expectations/checkpoints/.ge_store_backend_id
+gx/uncommitted/

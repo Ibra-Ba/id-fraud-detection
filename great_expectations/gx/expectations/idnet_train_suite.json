@@ -1,0 +1,9 @@
+{
+  "expectations": [],
+  "id": "c1bb09f0-bf2f-49c1-a026-91c7bc28881d",
+  "meta": {
+    "great_expectations_version": "1.15.1"
+  },
+  "name": "idnet_train_suite",
+  "notes": null
+}

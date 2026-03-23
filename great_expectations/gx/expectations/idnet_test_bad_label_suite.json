@@ -1,0 +1,9 @@
+{
+  "expectations": [],
+  "id": "8422070c-e733-4ace-afe4-608ed487acbe",
+  "meta": {
+    "great_expectations_version": "1.15.1"
+  },
+  "name": "idnet_test_bad_label_suite",
+  "notes": null
+}
