@@ -86,3 +86,6 @@ great_expectations/uncommitted/
 great_expectations/expectations/.ge_store_backend_id
 great_expectations/checkpoints/.ge_store_backend_id
 gx/uncommitted/
+
+# Notebooks
+notebooks/

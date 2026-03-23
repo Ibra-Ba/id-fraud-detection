@@ -29,7 +29,7 @@ def run_pipeline(
 
     print("\n── Étape 2/3 : Prétraitement & split ─────────────────────────")
     # On passe explicitement les dossiers
-    preprocess(raw_dir=raw_dir, processed_dir=processed_dir)
+    preprocess()
 
     if validate:
         print("\n── Étape 3/3 : Validation Great Expectations ─────────────────")

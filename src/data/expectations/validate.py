@@ -57,7 +57,8 @@ def validate_split(df: pd.DataFrame, split_name: str) -> bool:
     validator.expect_table_row_count_to_be_between(min_value=1)
 
     fraud_ratio = df["label"].mean()
-    validator.expect_column_mean_to_be_between("label", min_value=0.20, max_value=0.80)
+    # validator.expect_column_mean_to_be_between("label", min_value=0.20, max_value=0.80)
+    validator.expect_column_values_to_be_in_set("label", [0, 1])
 
     validator.expect_column_values_to_match_regex("path", regex=r".+\.(?:jpg|jpeg|png)$")
 

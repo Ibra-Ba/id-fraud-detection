@@ -1,0 +1,9 @@
+{
+  "expectations": [],
+  "id": "bf494b16-6f42-4a38-bbbb-e5dd08796a76",
+  "meta": {
+    "great_expectations_version": "1.15.1"
+  },
+  "name": "idnet_val_suite",
+  "notes": null
+}

@@ -109,5 +109,13 @@ fluent_datasources:
         type: dataframe
         id: 6c1ae157-7bb0-43aa-8309-878c52040c2d
         batch_metadata: {}
+      idnet_val:
+        type: dataframe
+        id: 224668ac-8715-4086-ac9c-e2db3d00b54e
+        batch_metadata: {}
+      idnet_test:
+        type: dataframe
+        id: faa2e1f0-99a9-4615-8413-72d857d41a5b
+        batch_metadata: {}
 analytics_enabled:
 data_context_id: aaa27ac2-4985-40f7-b954-1470c730500c
