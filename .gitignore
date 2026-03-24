@@ -34,6 +34,7 @@ data/processed/
 
 # ─── MLflow ───────────────────────────────────────────────────────────────────
 mlruns/
+mlflow.db
 mlartifacts/
 
 # ─── Modèles ──────────────────────────────────────────────────────────────────
@@ -89,3 +90,4 @@ gx/uncommitted/
 
 # Notebooks
 notebooks/
+src/models/train1.py
