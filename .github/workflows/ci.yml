@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # Job 1 : Lint
+  lint:
+    name: Lint (Black + Ruff)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10.12"
+          cache: pip
+
+      - name: Install lint deps
+        run: pip install black==26.3.1 ruff==0.15.6
+
+      - name: Black
+        run: black --check src/ tests/
+
+      - name: Ruff
+        run: ruff check src/ tests/
+
+  # Job 2 : Tests unitaires
+  test-unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-cpu.txt
+          pip install -e .
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -v --tb=short
+
+  # ─── Job 3 : Tests d'intégration ─────────────────────────────────────────────
+  test-integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    needs: test-unit
+    #
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+
+    env:
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-cpu.txt
+          pip install -e .
+
+      - name: Run integration tests
+        run: pytest tests/integration/ -v --tb=short -m "not slow"
