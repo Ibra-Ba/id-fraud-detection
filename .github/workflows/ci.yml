@@ -45,8 +45,10 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements-cpu.txt
-          pip install -e .
+            pip install -r requirements-cpu.txt
+            pip install -r requirements.txt
+            pip install -e .
+
 
       - name: Run unit tests
         run: pytest tests/unit/ -v --tb=short
@@ -76,6 +78,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements-cpu.txt
+          pip install -r requirements.txt
           pip install -e .
 
       - name: Run integration tests
