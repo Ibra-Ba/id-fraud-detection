@@ -43,7 +43,7 @@ class TestValidateManifestInterface:
         assert isinstance(result, bool)
 
 
-# validate_split — logique interne (GX mocké)
+# validate_split
 
 
 class TestValidateSplitLogic:
@@ -85,8 +85,6 @@ class TestValidateSplitLogic:
         """Un DataFrame vide doit retourner False."""
         import pandas as pd
 
-        from src.data.expectations.validate import validate_split  # noqa: F401
-
         df = pd.DataFrame(columns=["path", "label"])
 
         with patch("src.data.expectations.validate.validate_split", return_value=False) as mock_vs:
@@ -95,6 +93,7 @@ class TestValidateSplitLogic:
         assert result is False
 
 
+# ---------------------------------------------------------------------------
 # validate_all — orchestration
 
 
@@ -127,6 +126,7 @@ class TestValidateAll:
             [{"path": "/fake/img.png", "label": "1"}],
             ["path", "label"],
         )
+        # val et test absents → skip, seul train est validé
 
         with patch.object(validate_module, "validate_split", return_value=False):
             with pytest.raises(ValueError, match="FAILED"):
