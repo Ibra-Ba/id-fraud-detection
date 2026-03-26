@@ -12,6 +12,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from src.data.expectations import validate as validate_module
+
 
 def _write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> Path:
     with open(path, "w", newline="") as f:
@@ -104,19 +106,25 @@ class TestValidateSplitLogic:
 
 class TestValidateAll:
     def test_validate_all_calls_validate_split(self, tmp_path, monkeypatch):
-        from src.data.expectations import validate as validate_module
-
+        # 1. Configurer l'environnement AVANT d'appeler la fonction
         monkeypatch.setenv("DATA_PROCESSED_DIR", str(tmp_path))
 
-        # Créer des CSV minimaux
+        # 2. Créer les fichiers dans le tmp_path
         for split in ("train", "val", "test"):
             _write_csv(
                 tmp_path / f"{split}.csv",
-                [{"path": "/fake/img.png", "label": "1"}],
+                [
+                    {"path": "img1.png", "label": "1"},  # Fraude
+                    {"path": "img2.png", "label": "1"},  # Fraude
+                    {"path": "img3.png", "label": "1"},  # Fraude
+                    {"path": "img4.png", "label": "1"},  # Fraude
+                    {"path": "img5.png", "label": "0"},  # Génuine (Ratio = 4/5 = 80%)
+                ],
                 ["path", "label"],
             )
 
-        with patch.object(validate_module, "validate_split", return_value=True) as mock_vs:
+        # 3. Patcher validate_split dans le module
+        with patch("src.data.expectations.validate.validate_split", return_value=True) as mock_vs:
             validate_module.validate_all()
 
         assert mock_vs.call_count == 3

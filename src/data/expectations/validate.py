@@ -72,11 +72,14 @@ def validate_split(df: pd.DataFrame, split_name: str) -> bool:
 
 
 def validate_all() -> bool:
-    """Valide les 3 splits."""
+    """Valide les 3 splits en utilisant la variable d'env à l'instant T."""
+    # On récupère le dossier ici, PAS en haut du fichier
+    processed_dir = Path(os.getenv("DATA_PROCESSED_DIR", "data/processed"))
+
     for split in ["train", "val", "test"]:
-        file_path = PROCESSED_DIR / f"{split}.csv"
+        file_path = processed_dir / f"{split}.csv"
         if not file_path.exists():
-            print(f"⚠️ Skip {split}: file not found")
+            print(f"⚠️ Skip {split}: file not found at {file_path}")
             continue
 
         df = pd.read_csv(file_path)
