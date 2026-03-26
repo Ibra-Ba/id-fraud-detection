@@ -120,7 +120,7 @@ def evaluate(
         plt.close(fig_cm)
         plt.close(fig_roc)
 
-    # ── Quality Gate ──
+    # Quality Gate
     passed = metrics["auroc"] >= MIN_AUROC and metrics["f1"] >= MIN_F1
     metrics["gate_passed"] = passed
 

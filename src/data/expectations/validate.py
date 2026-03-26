@@ -11,7 +11,7 @@ GE_DIR = Path("great_expectations")
 
 def build_context():
     """Initialise le contexte GX moderne."""
-    # GX 1.x gère seul la création/chargement
+
     return gx.get_context(project_root_dir=str(GE_DIR))
 
 
@@ -38,17 +38,15 @@ def validate_split(df: pd.DataFrame, split_name: str) -> bool:
     # 2. Suite d'expectations
     suite_name = f"idnet_{split_name}_suite"
 
-    # On définit la suite
     suite_obj = gx.ExpectationSuite(name=suite_name)
 
-    # On utilise add_or_update au lieu de add() ou get()
     suite = context.suites.add_or_update(suite_obj)
 
     validator = context.get_validator(
         batch_request=batch_req,
         expectation_suite=suite,
     )
-    # --- Expectations ---
+    # Expectations
     validator.expect_table_columns_to_match_ordered_list(["path", "label"])
     validator.expect_column_values_to_not_be_null("path")
     validator.expect_column_values_to_not_be_null("label")
@@ -57,18 +55,17 @@ def validate_split(df: pd.DataFrame, split_name: str) -> bool:
     validator.expect_table_row_count_to_be_between(min_value=1)
 
     fraud_ratio = df["label"].mean()
-    # validator.expect_column_mean_to_be_between("label", min_value=0.20, max_value=0.80)
+    validator.expect_column_mean_to_be_between("label", min_value=0.70, max_value=0.95)
     validator.expect_column_values_to_be_in_set("label", [0, 1])
 
     validator.expect_column_values_to_match_regex("path", regex=r".+\.(?:jpg|jpeg|png)$")
 
-    # 4. Sauvegarde et Validation
-    # validator.save_expectation_suite()
+    # 4. Sauvegard et validation
 
     results = validator.validate()
 
     success = bool(results.success)
-    status = "✅ PASSED" if success else "❌ FAILED"
+    status = " PASSED" if success else " FAILED"
     print(f"[GE] {split_name:5s} validation {status} (fraud_ratio={fraud_ratio:.2%}, n={len(df)})")
 
     return success
@@ -88,6 +85,11 @@ def validate_all() -> bool:
 
     print("[GE] All splits validated successfully ✅")
     return True
+
+
+def validate_manifest(csv_path: Path) -> bool:
+    df = pd.read_csv(csv_path)
+    return validate_split(df, Path(csv_path).stem)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ from sklearn.metrics import f1_score, roc_auc_score
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-# 1. Chargement des variables d'environnement (indispensable pour le MLflow distant)
+# 1. Chargement des variables d'environnement
 load_dotenv()
 
 from src.data.dataset import TRAIN_TF, VAL_TF, IDNetDataset  # noqa: E402
@@ -20,10 +20,22 @@ from src.models.config import (  # noqa: E402
     FREEZE_EPOCHS,
     LR_FINETUNE,
     LR_HEAD,
+    MIN_AUROC,
     PROCESSED_DIR,
     TOTAL_EPOCHS,
 )
 from src.models.efficientnet import FraudClassifier  # noqa: E402
+
+
+def check_quality_gate(auroc: float) -> bool:
+    if auroc != auroc:  # NaN check
+        raise ValueError("AUROC is NaN")
+    return auroc >= MIN_AUROC
+
+
+def make_optimizer(model, lr: float, phase: int):
+    params = filter(lambda p: p.requires_grad, model.parameters())
+    return torch.optim.Adam(params, lr=lr)
 
 
 def run_epoch(model, loader, criterion, optimizer=None):

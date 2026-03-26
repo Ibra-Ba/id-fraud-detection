@@ -8,9 +8,7 @@ import torch
 from PIL import Image
 from torch.utils.data import DataLoader
 
-# ---------------------------------------------------------------------------
 # IDNetDataset — basic contract
-# ---------------------------------------------------------------------------
 
 
 class TestIDNetDataset:
@@ -18,7 +16,7 @@ class TestIDNetDataset:
         from src.data.dataset import VAL_TF, IDNetDataset
 
         ds = IDNetDataset(split_manifests["train"], transform=VAL_TF)
-        # 8 genuine + 2 fraud = 10
+
         assert len(ds) == 10
 
     def test_getitem_shapes(self, split_manifests):
@@ -60,9 +58,7 @@ class TestIDNetDataset:
         assert image.max() < 4.0
 
 
-# ---------------------------------------------------------------------------
 # Transforms
-# ---------------------------------------------------------------------------
 
 
 class TestTransforms:
@@ -83,18 +79,20 @@ class TestTransforms:
         assert tensor.shape == (3, 224, 224)
 
     def test_train_transform_is_not_deterministic(self):
-        """Training transforms include random augmentations."""
+        """Training transforms include random augmentations.
+        On tente 10 fois — la proba que toutes soient identiques est négligeable.
+        """
         from src.data.dataset import TRAIN_TF
 
         arr = np.random.randint(0, 256, (300, 400, 3), dtype=np.uint8)
 
-        def _apply(arr):
-            r = TRAIN_TF(image=arr)
+        def _apply():
+            r = TRAIN_TF(image=arr.copy())
             return r["image"] if isinstance(r, dict) else r
 
-        t1 = _apply(arr.copy())
-        t2 = _apply(arr.copy())
-        assert not torch.equal(t1, t2), "TRAIN_TF should be stochastic (random augmentations)"
+        results = [_apply() for _ in range(10)]
+        all_equal = all(torch.equal(results[0], r) for r in results[1:])
+        assert not all_equal, "TRAIN_TF should be stochastic — all 10 outputs were identical"
 
     def test_val_transform_is_deterministic(self):
         """Validation/test transforms must be deterministic."""
