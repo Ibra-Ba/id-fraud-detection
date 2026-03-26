@@ -21,7 +21,9 @@ def _write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> Path:
     return path
 
 
-# validate_manifest
+# ---------------------------------------------------------------------------
+# validate_manifest — interface attendue par les tests
+# ---------------------------------------------------------------------------
 
 
 class TestValidateManifestInterface:
@@ -43,7 +45,9 @@ class TestValidateManifestInterface:
         assert isinstance(result, bool)
 
 
-# validate_split
+# ---------------------------------------------------------------------------
+# validate_split — logique interne (GX mocké)
+# ---------------------------------------------------------------------------
 
 
 class TestValidateSplitLogic:
@@ -95,6 +99,7 @@ class TestValidateSplitLogic:
 
 # ---------------------------------------------------------------------------
 # validate_all — orchestration
+# ---------------------------------------------------------------------------
 
 
 class TestValidateAll:
