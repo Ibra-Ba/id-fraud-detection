@@ -42,9 +42,7 @@ jobs:
           import os
           import mlflow
           from mlflow.tracking import MlflowClient
-          from dotenv import load_dotenv
 
-          load_dotenv()
           mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
           client = MlflowClient()
 
