@@ -91,3 +91,5 @@ gx/uncommitted/
 # Notebooks
 notebooks/
 src/models/train1.py
+# api
+src/api/__pycache__/
