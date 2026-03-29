@@ -1,0 +1,276 @@
+name: CT — Continuous Training
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Raison du réentraînement (ex: data drift, nouveau batch)"
+        required: false
+        default: "manual trigger"
+      min_auroc_improvement:
+        description: "Amélioration AUROC minimale pour promouvoir (ex: 0.001)"
+        required: false
+        default: "0.001"
+
+jobs:
+  # ─── Job 1 : Réentraînement ───────────────────────────────────────────────
+  train:
+    name: Fine-tune champion
+    runs-on: ubuntu-latest
+
+    env:
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      S3_BUCKET: ${{ secrets.S3_BUCKET }}
+      DATA_PROCESSED_DIR: data/processed
+      DATA_RAW_DIR: data/raw
+
+    outputs:
+      new_run_id: ${{ steps.train.outputs.new_run_id }}
+      new_auroc: ${{ steps.train.outputs.new_auroc }}
+      champion_auroc: ${{ steps.train.outputs.champion_auroc }}
+      promoted: ${{ steps.promote.outputs.promoted }}
+      new_version: ${{ steps.promote.outputs.new_version }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-cpu.txt
+          pip install -r requirements.txt
+          pip install awscli
+          pip install -e .
+
+      - name: Sync data from S3
+        run: |
+          echo "── Sync manifests CSV depuis S3 ──"
+          aws s3 sync s3://${S3_BUCKET}/data/processed/ data/processed/
+          echo "── Sync images raw depuis S3 ──"
+          aws s3 sync s3://${S3_BUCKET}/data/raw/ data/raw/
+          echo "✅ Sync S3 terminé"
+          echo "Manifests disponibles :"
+          ls data/processed/
+
+      - name: Fine-tune champion model
+        id: train
+        env:
+          REASON: ${{ github.event.inputs.reason }}
+        run: |
+          python - <<'EOF'
+          import os
+          import mlflow
+          import mlflow.pytorch
+          import torch
+          import torch.nn as nn
+          from mlflow.tracking import MlflowClient
+          from torch.utils.data import DataLoader
+          from sklearn.metrics import roc_auc_score
+
+          from src.data.dataset import TRAIN_TF, VAL_TF, IDNetDataset
+          from src.models.config import (
+              BATCH_SIZE, DEVICE, LR_FINETUNE,
+              PROCESSED_DIR, TOTAL_EPOCHS,
+          )
+
+          mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
+          client = MlflowClient()
+          model_name = os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector")
+
+          # ── Charge le champion actuel ──
+          print("Chargement du champion @champion...")
+          mv = client.get_model_version_by_alias(model_name, "champion")
+          champion_run = client.get_run(mv.run_id)
+          champion_auroc = champion_run.data.metrics.get(
+              "test_auroc", champion_run.data.metrics.get("vl_auroc", 0.0)
+          )
+          print(f"Champion actuel : v{mv.version} (AUROC={champion_auroc:.4f})")
+
+          model = mlflow.pytorch.load_model(
+              f"models:/{model_name}@champion", map_location=DEVICE
+          )
+          model = model.to(DEVICE)
+
+          # ── Fine-tune blocs 6+7 uniquement ──
+          for name, param in model.backbone.named_parameters():
+              param.requires_grad = any(
+                  x in name for x in ["blocks.6", "blocks.7", "classifier"]
+              )
+
+          # ── DataLoaders ──
+          train_dl = DataLoader(
+              IDNetDataset(PROCESSED_DIR / "train.csv", TRAIN_TF),
+              batch_size=BATCH_SIZE, shuffle=True, num_workers=0,
+          )
+          val_dl = DataLoader(
+              IDNetDataset(PROCESSED_DIR / "val.csv", VAL_TF),
+              batch_size=BATCH_SIZE, shuffle=False, num_workers=0,
+          )
+
+          criterion = nn.CrossEntropyLoss()
+          optimizer = torch.optim.Adam(
+              filter(lambda p: p.requires_grad, model.parameters()),
+              lr=LR_FINETUNE,
+          )
+
+          best_auroc = 0.0
+          best_run_id = None
+
+          with mlflow.start_run() as run:
+              mlflow.log_params({
+                  "model": "efficientnet_b0",
+                  "strategy": "finetune_champion",
+                  "base_version": mv.version,
+                  "reason": os.getenv("REASON", "manual trigger"),
+                  "batch_size": BATCH_SIZE,
+              })
+
+              for epoch in range(1, TOTAL_EPOCHS + 1):
+                  model.train()
+                  for images, labels in train_dl:
+                      images, labels = images.to(DEVICE), labels.to(DEVICE)
+                      optimizer.zero_grad()
+                      loss = criterion(model(images), labels)
+                      loss.backward()
+                      optimizer.step()
+
+                  model.eval()
+                  all_probs, all_labels = [], []
+                  with torch.no_grad():
+                      for images, labels in val_dl:
+                          probs = torch.softmax(
+                              model(images.to(DEVICE)), dim=1
+                          )[:, 1]
+                          all_probs.extend(probs.cpu().numpy())
+                          all_labels.extend(labels.numpy())
+
+                  vl_auroc = float(roc_auc_score(all_labels, all_probs))
+                  mlflow.log_metric("vl_auroc", vl_auroc, step=epoch)
+                  print(f"Epoch {epoch:02d} | Val AUROC: {vl_auroc:.4f}")
+
+                  if vl_auroc > best_auroc:
+                      best_auroc = vl_auroc
+                      torch.save(model.state_dict(), "best_model_ct.pt")
+                      try:
+                          mlflow.pytorch.log_model(model, artifact_path="model")
+                      except Exception as e:
+                          print(f"⚠️ MLflow upload warning: {e}")
+
+              best_run_id = run.info.run_id
+              print(f"\nMeilleur AUROC CT : {best_auroc:.4f} (run_id={best_run_id})")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"new_run_id={best_run_id}\n")
+              f.write(f"new_auroc={best_auroc:.4f}\n")
+              f.write(f"champion_auroc={champion_auroc:.4f}\n")
+          EOF
+
+      - name: Promote if better than champion
+        id: promote
+        env:
+          NEW_RUN_ID: ${{ steps.train.outputs.new_run_id }}
+          NEW_AUROC: ${{ steps.train.outputs.new_auroc }}
+          CHAMPION_AUROC: ${{ steps.train.outputs.champion_auroc }}
+          MIN_IMPROVEMENT: ${{ github.event.inputs.min_auroc_improvement || '0.001' }}
+        run: |
+          python - <<'EOF'
+          import os
+          import mlflow
+          from mlflow.tracking import MlflowClient
+
+          mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
+          client = MlflowClient()
+          model_name = os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector")
+
+          new_run_id = os.getenv("NEW_RUN_ID")
+          new_auroc = float(os.getenv("NEW_AUROC"))
+          champion_auroc = float(os.getenv("CHAMPION_AUROC"))
+          min_improvement = float(os.getenv("MIN_IMPROVEMENT", "0.001"))
+
+          promoted = "false"
+          new_version = "none"
+
+          if new_auroc >= champion_auroc + min_improvement:
+              mv = mlflow.register_model(f"runs:/{new_run_id}/model", model_name)
+              new_version = mv.version
+              client.set_model_version_tag(model_name, new_version, "deployed_by", "ct_workflow")
+              client.set_model_version_tag(model_name, new_version, "deployment_status", "validated")
+              client.set_registered_model_alias(model_name, "champion", new_version)
+              print(f"✅ Nouveau champion : v{new_version} (AUROC={new_auroc:.4f})")
+              promoted = "true"
+          else:
+              print(f"⚠️ Champion conservé (new={new_auroc:.4f} < champion={champion_auroc:.4f} + {min_improvement})")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"promoted={promoted}\n")
+              f.write(f"new_version={new_version}\n")
+          EOF
+
+  # ─── Job 2 : Déploiement si promu ─────────────────────────────────────────
+  deploy:
+    name: Deploy new champion
+    runs-on: ubuntu-latest
+    needs: train
+    if: needs.train.outputs.promoted == 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Push to HF Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE_REPO: ${{ secrets.HF_SPACE_REPO }}
+        run: |
+          git config --global user.email "ci@github.com"
+          git config --global user.name "GitHub Actions CT"
+
+          git clone https://oauth2:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_REPO} hf_space
+          cd hf_space
+          cp -r ../src ./src
+          cp ../pyproject.toml .
+          git add .
+          git diff --cached --quiet && echo "Rien à déployer" && exit 0
+          git commit -m "ct: deploy new champion v${{ needs.train.outputs.new_version }} (AUROC=${{ needs.train.outputs.new_auroc }})"
+          git push
+          echo "✅ Space HF mis à jour"
+
+  # ─── Job 3 : Notification ─────────────────────────────────────────────────
+  notify:
+    name: Notify CT result
+    runs-on: ubuntu-latest
+    needs: [train, deploy]
+    if: always()
+
+    steps:
+      - name: Send email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.GMAIL_USERNAME }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          subject: |
+            [Id-Fraud-Sentinel] CT ${{ needs.train.outputs.promoted == 'true' && '✅ nouveau champion' || '⚠️ champion conservé' }}
+          to: ${{ secrets.GMAIL_USERNAME }}
+          from: ${{ secrets.GMAIL_USERNAME }}
+          body: |
+            Résultat du Continuous Training.
+
+            Raison          : ${{ github.event.inputs.reason || 'manual trigger' }}
+            Nouveau AUROC   : ${{ needs.train.outputs.new_auroc }}
+            Champion AUROC  : ${{ needs.train.outputs.champion_auroc }}
+            Promu           : ${{ needs.train.outputs.promoted }}
+            Nouvelle version: v${{ needs.train.outputs.new_version }}
+
+            Space HF : https://huggingface.co/spaces/${{ secrets.HF_SPACE_REPO }}
