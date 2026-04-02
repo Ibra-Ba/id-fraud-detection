@@ -16,7 +16,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  # ─── Job 1 : Réentraînement ───────────────────────────────────────────────
+  # ─── Job 1 : Réentraînement *************************************************
   train:
     name: Fine-tune champion
     runs-on: ubuntu-latest
