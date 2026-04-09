@@ -1,5 +1,5 @@
 """Usage:
-python -m src.monitoring.build_reference
+python -m src.monitoring.build_reference_csv
 """
 
 from src.monitoring.monitor_pro import load_s3_predictions
