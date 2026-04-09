@@ -10,6 +10,8 @@ from sklearn.metrics import f1_score, roc_auc_score
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from src.models.simulate_threshold import find_threshold_for_recall, load_scores
+
 # 1. Chargement des variables d'environnement
 load_dotenv()
 
@@ -152,14 +154,28 @@ def train():
                 # --- SAUVEGARDE SÉCURISÉE ---
                 if vl_auroc > best_auroc:
                     best_auroc = vl_auroc
+
                     # 1. Sauvegarde locale (survit au crash réseau)
                     torch.save(model.state_dict(), "best_model_checkpoint.pt")
+
                     # 2. MLflow
                     try:
                         mlflow.pytorch.log_model(model, artifact_path="model")
                         print(f"  ⭐ Record Sauvegardé : {best_auroc:.4f}")
+
                     except Exception as e:
+
                         print(f"  ⚠️ Erreur upload MLflow (Backup local OK) : {e}")
+
+            print("\n--- Calcul du seuil optimal (Target Recall: 95%) ---")
+
+            y_true, y_score = load_scores(PROCESSED_DIR / "val.csv")
+
+            optimal_threshold = find_threshold_for_recall(y_true, y_score, target_recall=0.95)
+
+            # On enregistre dans MLflow
+            mlflow.log_param("optimal_threshold", optimal_threshold)
+            print(f"✅ Seuil optimal enregistré : {optimal_threshold}")
 
     except KeyboardInterrupt:
         print(
