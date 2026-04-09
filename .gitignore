@@ -91,5 +91,8 @@ gx/uncommitted/
 # Notebooks
 notebooks/
 src/models/train1.py
+fix_tag.py
+verif_tag_update.py
+src/monitoring/monitor.py
 # api
 src/api/__pycache__/
