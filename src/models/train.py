@@ -114,7 +114,14 @@ def train():
     print(f"[INFO] Tracking vers: {tracking_uri}\n")
 
     try:
-        with mlflow.start_run():
+        with mlflow.start_run() as run:
+            run_id = run.info.run_id
+
+            # 🔥 tags contextuels (IMMÉDIATEMENT)
+            mlflow.set_tag("retrain_reason", os.getenv("REASON", "manual"))
+            mlflow.set_tag("pipeline", "training")
+            mlflow.set_tag("trigger", "github_actions")
+
             mlflow.log_params({"model": "efficientnet_b0", "batch_size": BATCH_SIZE})
 
             for epoch in range(1, TOTAL_EPOCHS + 1):
@@ -183,6 +190,7 @@ def train():
         )
     finally:
         mlflow.end_run()
+    return run_id
 
 
 if __name__ == "__main__":

@@ -148,7 +148,7 @@ def evaluate_from_run(run_id: str) -> dict:
         num_workers=2,
     )
 
-    with mlflow.start_run(run_id=run_id):
+    with mlflow.start_run(run_id=run_id, nested=True):
         return evaluate(model, test_dl, log_to_mlflow=True, enforce_gate=True)
 
 

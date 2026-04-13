@@ -11,3 +11,9 @@ Système de détection de fraude à l'identité basé sur le deep learning.
 ## 📊 Performances
 - **AUROC :** 0.9337 (Champion model)
 - **Statut des tests :** 61 tests unitaires passés (✅ 100%)
+
+MLOps capabilities:
+- Monitoring (Evidently)
+- Drift detection
+- Automated retraining (GitHub Actions)
+- MLflow model registry (champion/challenger)
