@@ -55,6 +55,7 @@ jobs:
           pip install -e .
 
       - name: Sync data from S3
+
         run: |
           echo "── Sync manifests CSV depuis S3 ──"
           aws s3 sync s3://${S3_BUCKET}/data/processed/ data/processed/
