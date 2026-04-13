@@ -146,8 +146,41 @@ def run_pipeline(
     for k, v in results.items():
         print(f"  {k}: {v}")
 
+    # if results.get("drift_alert"):
+    #    logger.warning("⚠️  ALERTE DRIFT détectée\n" "   → Déclencher le CT via workflow_dispatch")
     if results.get("drift_alert"):
-        logger.warning("⚠️  ALERTE DRIFT détectée\n" "   → Déclencher le CT via workflow_dispatch")
+        logger.warning("⚠️ Drift détecté")
+
+        # 🔒 flag de sécurité (évite retrain non voulu)
+        auto_retrain = os.getenv("AUTO_RETRAIN", "0") == "1"
+        if auto_retrain:
+            logger.info("🚀 Triggering CT workflow...")
+            try:
+                import requests
+
+                repo = os.getenv("GITHUB_REPOSITORY")
+                token = os.getenv("GITHUB_TOKEN")
+
+                if not repo or not token:
+                    raise ValueError("Missing GITHUB_REPOSITORY or GITHUB_TOKEN")
+
+                url = f"https://api.github.com/repos/{repo}/actions/workflows/ct.yml/dispatches"
+                response = requests.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "Accept": "application/vnd.github+json",
+                    },
+                    json={"ref": "main"},
+                )
+                if response.status_code == 204:
+                    logger.info("✅ CT workflow triggered successfully")
+                else:
+                    logger.error(f"❌ Failed to trigger CT: {response.text}")
+            except Exception as e:
+                logger.error(f"❌ Error triggering CT: {e}")
+        else:
+            logger.info("ℹ️ AUTO_RETRAIN disabled (set AUTO_RETRAIN=1 to enable)")
 
     return results
 
