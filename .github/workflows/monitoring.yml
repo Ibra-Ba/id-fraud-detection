@@ -31,6 +31,17 @@ jobs:
           pip install -r requirements.txt
           pip install -e .
 
+      - name: Sync processed data from S3
+        run: |
+          echo "── Creating local data directory ──"
+          mkdir -p data/processed
+
+          echo "── Sync data from S3 ──"
+          aws s3 sync s3://cni-fraud-detection/data/processed/ data/processed/
+
+          echo "── Files downloaded ──"
+          ls -lh data/processed/
+
       - name: Run monitoring pipeline
         run: |
           python -m src.monitoring.run_monitoring_pipeline --skip-generate
