@@ -64,18 +64,26 @@ def get_champion_threshold() -> float:
 
 
 def load_model():
-    logger.info("Loading model from checkpoint...")
+    import mlflow.pytorch
 
     checkpoint = Path("best_model_checkpoint.pt")
-    if not checkpoint.exists():
-        raise FileNotFoundError(f"{checkpoint} introuvable")
 
-    model = FraudClassifier(pretrained=False)
-    model.load_state_dict(torch.load(checkpoint, map_location=DEVICE))
+    if checkpoint.exists():
+        logger.info("Loading model from local checkpoint...")
+        model = FraudClassifier(pretrained=False)
+        model.load_state_dict(torch.load(checkpoint, map_location=DEVICE))
+    else:
+        logger.info("Loading model from MLflow (champion)...")
+
+        uri = os.getenv("MLFLOW_TRACKING_URI")
+        if uri:
+            mlflow.set_tracking_uri(uri)
+
+        model_name = os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector")
+        model = mlflow.pytorch.load_model(f"models:/{model_name}@champion")
+
+    model = model.to(DEVICE)
     model.eval()
-    model.to(DEVICE)
-
-    logger.info("Model loaded successfully")
     return model
 
 

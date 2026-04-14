@@ -26,13 +26,32 @@ logger = logging.getLogger(__name__)
 
 
 def load_scores(csv_path: Path) -> tuple[np.ndarray, np.ndarray]:
-    """Charge le modèle depuis checkpoint et calcule les scores."""
-    checkpoint = Path("best_model_checkpoint.pt")
-    model = FraudClassifier(pretrained=False)
-    model.load_state_dict(torch.load(str(checkpoint), map_location=DEVICE))
-    model.eval()
-    model.to(DEVICE)
+    """Charge le modèle (local ou MLflow) et calcule les scores."""
+    import os
 
+    import mlflow.pytorch
+
+    checkpoint = Path("best_model_checkpoint.pt")
+
+    # ── Load model ─────────────────────────────────────────────
+    if checkpoint.exists():
+        print("[INFO] Loading model from local checkpoint")
+        model = FraudClassifier(pretrained=False)
+        model.load_state_dict(torch.load(str(checkpoint), map_location=DEVICE))
+    else:
+        print("[INFO] Loading model from MLflow (champion)")
+
+        uri = os.getenv("MLFLOW_TRACKING_URI")
+        if uri:
+            mlflow.set_tracking_uri(uri)
+
+        model_name = os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector")
+        model = mlflow.pytorch.load_model(f"models:/{model_name}@champion")
+
+    model = model.to(DEVICE)
+    model.eval()
+
+    # ── Data ───────────────────────────────────────────────────
     loader = DataLoader(
         IDNetDataset(csv_path, VAL_TF),
         batch_size=BATCH_SIZE,
@@ -40,7 +59,9 @@ def load_scores(csv_path: Path) -> tuple[np.ndarray, np.ndarray]:
         num_workers=0,
     )
 
+    # ── Inference ──────────────────────────────────────────────
     all_probs, all_labels = [], []
+
     with torch.no_grad():
         for images, labels in loader:
             probs = torch.softmax(model(images.to(DEVICE)), dim=1)[:, 1]
