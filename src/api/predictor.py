@@ -83,13 +83,21 @@ class FraudPredictor:
         label = "fraud" if fraud_prob >= self.threshold else "genuine"
         confidence = fraud_prob if label == "fraud" else float(probs[0])
 
-        return {
+        result = {
             "label": label,
             "fraud_probability": round(fraud_prob, 4),
             "confidence": round(confidence, 4),
             "threshold_used": self.threshold,
             "model_version": self.version,
         }
+
+        # 🔥 NEW → logging automatique
+        try:
+            self.log_inference(image_bytes, result)
+        except Exception as e:
+            logger.warning(f"S3 logging failed: {e}")
+
+        return result
 
     def get_info(self) -> dict:
         return {
@@ -116,6 +124,79 @@ class FraudPredictor:
             "accuracy": round(m.get("test_accuracy", m.get("vl_accuracy", 0.0)), 4),
             "optimal_threshold": self.threshold,
         }
+
+    # Montrer grad cam en cas de suspucion de fraud
+    def generate_gradcam(self, image_bytes: bytes):
+        """Génère une heatmap Grad-CAM pour une image."""
+
+        if not self._loaded:
+            raise RuntimeError("Modèle non chargé")
+
+        from pytorch_grad_cam import GradCAM
+        from pytorch_grad_cam.utils.image import show_cam_on_image
+
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        arr = np.array(image) / 255.0
+
+        result = VAL_TF(image=(arr * 255).astype(np.uint8))
+        tensor = result["image"] if isinstance(result, dict) else result
+        tensor = tensor.unsqueeze(0).to(DEVICE)
+
+        # ⚠️ dépend de ton modèle EfficientNet
+        target_layers = [self.model.backbone.features[-1]]  # type: ignore
+
+        cam = GradCAM(model=self.model, target_layers=target_layers)
+
+        grayscale_cam = cam(input_tensor=tensor)[0]
+
+        visualization = show_cam_on_image(arr, grayscale_cam, use_rgb=True)
+
+        return visualization
+
+    # Stockage image dans bucket S3
+
+    def log_inference(self, image_bytes: bytes, prediction: dict):
+        """Stocke image + metadata dans S3."""
+        import json
+        import uuid
+        from datetime import datetime
+
+        import boto3
+
+        s3 = boto3.client("s3")
+        bucket = os.getenv("S3_BUCKET")
+
+        if not bucket:
+            logger.warning("S3_BUCKET non défini → skip logging")
+        return
+
+        uid = str(uuid.uuid4())
+        timestamp = datetime.utcnow().isoformat()
+
+        # save image temporaire
+        img_path = f"/tmp/{uid}.png"
+        with open(img_path, "wb") as f:
+            f.write(image_bytes)
+
+        # upload image
+        s3.upload_file(img_path, bucket, f"inference/images/{uid}.png")
+
+        # metadata enrichie
+        metadata = {
+            "id": uid,
+            "timestamp": timestamp,
+            "prediction": prediction,
+            "model_version": self.version,
+            "threshold": self.threshold,
+            "source": "api",
+        }
+
+        s3.put_object(
+            Bucket=bucket,
+            Key=f"inference/metadata/{uid}.json",
+            Body=json.dumps(metadata),
+            ContentType="application/json",
+        )
 
 
 # Instance singleton — partagée par toute l'application
