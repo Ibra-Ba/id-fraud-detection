@@ -80,7 +80,7 @@ def load_scores(csv_path: Path, source="mlflow") -> tuple[np.ndarray, np.ndarray
 def find_threshold_for_recall(
     y_true: np.ndarray,
     y_score: np.ndarray,
-    target_recall: float = 0.95,
+    target_recall: float = 0.90,
 ) -> float:
     """
     Trouve le seuil le plus élevé qui garantit recall >= target_recall.
@@ -147,7 +147,7 @@ def simulate(
     return pd.DataFrame(rows)
 
 
-def main(target_recall: float = 0.95, csv_path: Path | None = None, source="mlflow"):  # noqa: UP045
+def main(target_recall: float = 0.90, csv_path: Path | None = None, source="mlflow"):  # noqa: UP045
     csv_path = csv_path or (PROCESSED_DIR / "test.csv")
 
     logger.info(f"Chargement des scores depuis {csv_path}...")
@@ -156,12 +156,14 @@ def main(target_recall: float = 0.95, csv_path: Path | None = None, source="mlfl
 
     # Grille de seuils à tester
     # thresholds = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 0.9262]
-    thresholds = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
+    # Debug
+    # thresholds = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
+    thresholds = np.linspace(0.0, 1.0, 50).tolist()
 
     # Seuil optimal pour le recall cible
     optimal = find_threshold_for_recall(y_true, y_score, target_recall)
     if optimal not in thresholds:
-        thresholds.append(optimal)
+        thresholds.append(optimal)  # type: ignore
     thresholds = sorted(thresholds)
 
     # Simulation
@@ -193,7 +195,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--target-recall",
         type=float,
-        default=0.95,
+        default=0.90,
         help="Recall fraud minimum souhaité (défaut: 0.95)",
     )
 

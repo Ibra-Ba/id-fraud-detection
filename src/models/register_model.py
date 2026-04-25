@@ -80,5 +80,5 @@ def register_and_promote(run_id, model_name="IDNet-Fraud-Detector", threshold=No
 if __name__ == "__main__":
     # Remplacer par le vrai RUN_ID après un entraînement
     # Si threshold=None, threshod dans MLflow sera utilisé.
-    RUN_ID = "71a95d1c305d455dad1fdbbcb1168db5"
+    RUN_ID = "f80965bd7ba241acb90e6eb57a356fb0"
     register_and_promote(RUN_ID, threshold=None)

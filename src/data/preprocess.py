@@ -25,6 +25,7 @@ FRAUD_DIRS = [
     "fraud5_inpaint_and_rewrite",
     "fraud6_crop_and_replace",
 ]
+print("⚠️ USING CUSTOM SPLIT FUNCTION")
 
 
 def _collect_images(raw_dir: Path) -> pd.DataFrame:
@@ -85,14 +86,43 @@ def _collect_images(raw_dir: Path) -> pd.DataFrame:
     return df
 
 
-def split_dataset(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Stratified 70/15/15 split."""
+def split_dataset(df: pd.DataFrame):
+
+    print("⚠️ CUSTOM SPLIT ACTIVE")
+
+    fraud_df = df[df.label == 1]
+    genuine_df = df[df.label == 0]
+
+    print(f"[BEFORE] fraud={len(fraud_df)} | genuine={len(genuine_df)}")
+
+    # --- équilibrage ---
+    target_ratio = 0.3  # 30% fraude
+
+    n_genuine = len(genuine_df)
+    n_fraud_target = int(n_genuine * target_ratio / (1 - target_ratio))
+
+    fraud_sampled = fraud_df.sample(n=n_fraud_target, random_state=42)
+
+    df_balanced = pd.concat([genuine_df, fraud_sampled]).sample(frac=1, random_state=42)
+
+    print(f"[AFTER] fraud={len(fraud_sampled)} | genuine={len(genuine_df)}")
+    print(f"[AFTER] ratio fraud = {df_balanced.label.mean():.2%}")
+
+    # --- split ---
     train, temp = train_test_split(
-        df, test_size=0.30, stratify=df["label"], random_state=RANDOM_SEED
+        df_balanced,
+        test_size=0.30,
+        stratify=df_balanced["label"],
+        random_state=42,
     )
+
     val, test = train_test_split(
-        temp, test_size=0.50, stratify=temp["label"], random_state=RANDOM_SEED
+        temp,
+        test_size=0.50,
+        stratify=temp["label"],
+        random_state=42,
     )
+
     return train, val, test
 
 
