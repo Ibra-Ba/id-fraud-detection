@@ -8,12 +8,13 @@ Usage:
 
 import argparse
 import logging
+import os
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import pandas as pd
 import torch
+from dotenv import load_dotenv
 from sklearn.metrics import classification_report, precision_recall_curve
 from torch.utils.data import DataLoader
 
@@ -21,23 +22,28 @@ from src.data.dataset import VAL_TF, IDNetDataset
 from src.models.config import BATCH_SIZE, DEVICE, PROCESSED_DIR
 from src.models.efficientnet import FraudClassifier
 
+load_dotenv()
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def load_scores(csv_path: Path) -> tuple[np.ndarray, np.ndarray]:
+def load_scores(csv_path: Path, source="mlflow") -> tuple[np.ndarray, np.ndarray]:
     """Charge le modèle (local ou MLflow) et calcule les scores."""
-    import os
 
     import mlflow.pytorch
 
-    checkpoint = Path("best_model_checkpoint.pt")
-
     # ── Load model ─────────────────────────────────────────────
-    if checkpoint.exists():
+
+    if source == "local":
+        checkpoint = Path("best_model_checkpoint.pt")
+        if not checkpoint.exists():
+            raise FileNotFoundError("Checkpoint local introuvable")
+
         print("[INFO] Loading model from local checkpoint")
         model = FraudClassifier(pretrained=False)
         model.load_state_dict(torch.load(str(checkpoint), map_location=DEVICE))
+
     else:
         print("[INFO] Loading model from MLflow (champion)")
 
@@ -74,7 +80,7 @@ def load_scores(csv_path: Path) -> tuple[np.ndarray, np.ndarray]:
 def find_threshold_for_recall(
     y_true: np.ndarray,
     y_score: np.ndarray,
-    target_recall: float = 0.95,
+    target_recall: float = 0.90,
 ) -> float:
     """
     Trouve le seuil le plus élevé qui garantit recall >= target_recall.
@@ -141,20 +147,23 @@ def simulate(
     return pd.DataFrame(rows)
 
 
-def main(target_recall: float = 0.95, csv_path: Optional[Path] = None):  # noqa: UP045
+def main(target_recall: float = 0.90, csv_path: Path | None = None, source="mlflow"):  # noqa: UP045
     csv_path = csv_path or (PROCESSED_DIR / "test.csv")
 
     logger.info(f"Chargement des scores depuis {csv_path}...")
-    y_true, y_score = load_scores(csv_path)
+    y_true, y_score = load_scores(csv_path, source=source)
     logger.info(f"{len(y_true)} échantillons | fraud_rate={y_true.mean():.2%}")
 
     # Grille de seuils à tester
-    thresholds = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 0.9262]
+    # thresholds = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 0.9262]
+    # Debug
+    # thresholds = [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90]
+    thresholds = np.linspace(0.0, 1.0, 50).tolist()
 
     # Seuil optimal pour le recall cible
     optimal = find_threshold_for_recall(y_true, y_score, target_recall)
     if optimal not in thresholds:
-        thresholds.append(optimal)
+        thresholds.append(optimal)  # type: ignore
     thresholds = sorted(thresholds)
 
     # Simulation
@@ -182,21 +191,33 @@ def main(target_recall: float = 0.95, csv_path: Optional[Path] = None):  # noqa:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+
     parser.add_argument(
         "--target-recall",
         type=float,
-        default=0.95,
+        default=0.90,
         help="Recall fraud minimum souhaité (défaut: 0.95)",
     )
+
     parser.add_argument(
         "--csv",
         type=str,
         default=None,
         help="CSV à évaluer (défaut: test.csv)",
     )
+
+    parser.add_argument(
+        "--source",
+        type=str,
+        choices=["mlflow", "local"],
+        default="mlflow",
+        help="Source du modèle (mlflow ou local). Défaut: mlflow",
+    )
+
     args = parser.parse_args()
 
     main(
         target_recall=args.target_recall,
         csv_path=Path(args.csv) if args.csv else None,
+        source=args.source,
     )

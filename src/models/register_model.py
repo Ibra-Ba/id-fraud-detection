@@ -13,14 +13,42 @@ def register_and_promote(run_id, model_name="IDNet-Fraud-Detector", threshold=No
     client = MlflowClient()
 
     # Récupération automatique du threshold si non fourni ---
+
     if threshold is None:
         print(f"[INFO] Recherche du threshold dans le run {run_id}...")
         run = client.get_run(run_id)
-        # On cherche 'optimal_threshold' dans les paramètres loggués par train.py
 
-        threshold_str = run.data.params.get("optimal_threshold", "0.5")
-        threshold = float(threshold_str)
-        print(f"[INFO] Threshold récupéré depuis MLflow : {threshold}")
+        # 1)  metrics
+        threshold_val = run.data.metrics.get("optimal_threshold")
+
+        # 2) fallback → params
+        if threshold_val is None:
+            print("[WARN] 'optimal_threshold' non trouvé dans metrics → fallback params")
+            threshold_str = run.data.params.get("optimal_threshold")
+            if threshold_str is not None:
+                try:
+                    threshold_val = float(threshold_str)
+                except ValueError:
+                    threshold_val = None
+
+        # 3) fallback → tags
+        if threshold_val is None:
+            print("[WARN] 'optimal_threshold' non trouvé dans params → fallback tags")
+            threshold_str = run.data.tags.get("optimal_threshold")
+            if threshold_str is not None:
+                try:
+                    threshold_val = float(threshold_str)
+                except ValueError:
+                    threshold_val = None
+
+        # 4) fallback final
+        if threshold_val is None:
+            print("[WARN] Aucun threshold trouvé → utilisation défaut = 0.5")
+            threshold = 0.5
+        else:
+            threshold = float(threshold_val)
+
+        print(f"[INFO] Threshold utilisé : {threshold}")
     # ---------------------------------------------------------------------
 
     print(f"--- Début de la publication du modèle : {model_name} ---")
@@ -31,7 +59,7 @@ def register_and_promote(run_id, model_name="IDNet-Fraud-Detector", threshold=No
     mv = mlflow.register_model(model_uri, model_name)
     version = mv.version
 
-    # 2. Ajout des Tags (On utilise le threshold ici)
+    # 2. Ajout des Tags
     print(f"[2/3] Ajout des tags à la V{version}...")
     client.set_model_version_tag(model_name, version, "optimal_threshold", str(threshold))
     client.set_model_version_tag(model_name, version, "deployment_status", "validated")
@@ -52,5 +80,5 @@ def register_and_promote(run_id, model_name="IDNet-Fraud-Detector", threshold=No
 if __name__ == "__main__":
     # Remplacer par le vrai RUN_ID après un entraînement
     # Si threshold=None, threshod dans MLflow sera utilisé.
-    RUN_ID = "votre_run_id_ici"
+    RUN_ID = "f80965bd7ba241acb90e6eb57a356fb0"
     register_and_promote(RUN_ID, threshold=None)

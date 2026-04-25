@@ -76,7 +76,7 @@ jobs:
               current_auroc = 0.0
               print("Aucun champion existant — promotion automatique")
 
-          if auroc >= current_auroc:
+          if auroc >= current_auroc + 0.001:
               client.set_registered_model_alias(model_name, "champion", version)
               print(f" v{version} promu @champion (AUROC={auroc:.4f} >= {current_auroc:.4f})")
           else:

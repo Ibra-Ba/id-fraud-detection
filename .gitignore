@@ -101,3 +101,4 @@ src/api/__pycache__/
 commandes_bash.md
 .github/workflows/ct_old_version.yml
 src/training/test_retrain_pipeline.py
+requirements_update.py

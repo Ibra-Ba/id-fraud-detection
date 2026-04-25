@@ -1,3 +1,4 @@
+import logging
 import os
 
 import mlflow
@@ -10,10 +11,15 @@ from sklearn.metrics import f1_score, roc_auc_score
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from src.models.simulate_threshold import find_threshold_for_recall, load_scores
+from src.models.simulate_threshold import find_threshold_for_recall
 
 # 1. Chargement des variables d'environnement
 load_dotenv()
+
+MODEL_NAME = os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector")
+
+# Logs pour debug
+
 
 from src.data.dataset import TRAIN_TF, VAL_TF, IDNetDataset  # noqa: E402
 from src.models.config import (  # noqa: E402
@@ -27,6 +33,25 @@ from src.models.config import (  # noqa: E402
     TOTAL_EPOCHS,
 )
 from src.models.efficientnet import FraudClassifier  # noqa: E402
+
+logging.getLogger("mlflow").setLevel(logging.DEBUG)
+logging.getLogger("urllib3").setLevel(logging.DEBUG)
+logging.getLogger("requests").setLevel(logging.DEBUG)
+
+
+def get_model_scores(model, loader):
+    model.eval()
+    all_probs, all_labels = [], []
+
+    with torch.no_grad():
+        for images, labels in loader:
+            images = images.to(DEVICE)
+            probs = torch.softmax(model(images), dim=1)[:, 1]
+
+            all_probs.extend(probs.cpu().numpy())
+            all_labels.extend(labels.numpy())
+
+    return np.array(all_labels), np.array(all_probs)
 
 
 def check_quality_gate(auroc: float) -> bool:
@@ -82,11 +107,27 @@ def run_epoch(model, loader, criterion, optimizer=None):
 
 def train():
     # Configuration MLflow
-    tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
+
+    tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
+
+    if not tracking_uri:
+        raise RuntimeError("MLFLOW_TRACKING_URI non défini")
+
     mlflow.set_tracking_uri(tracking_uri)
-    mlflow.set_experiment(os.getenv("MLFLOW_EXPERIMENT_NAME", "fraud-detection"))
+
+    experiment_name = os.getenv("MLFLOW_EXPERIMENT_NAME", "fraud-detection")
+    mlflow.set_experiment(experiment_name)
+
+    # ─── Hard reset du contexte MLflow ───────────────────
+
+    if mlflow.active_run() is not None:
+        print("Active MLflow run detected → closing it")
+        mlflow.end_run()
+
+    os.environ.pop("MLFLOW_RUN_ID", None)
 
     # Optimisation CPU : On détecte le nombre de cœurs disponibles
+
     cpus = os.cpu_count() or 2
     workers = min(4, cpus)
 
@@ -96,28 +137,33 @@ def train():
         shuffle=True,
         num_workers=workers,
         pin_memory=True,
-        persistent_workers=True,
+        persistent_workers=workers > 0,
     )
+
     val_dl = DataLoader(
         IDNetDataset(PROCESSED_DIR / "val.csv", VAL_TF),
         batch_size=BATCH_SIZE,
         shuffle=False,
         num_workers=workers,
         pin_memory=True,
+        persistent_workers=workers > 0,
     )
 
     model = FraudClassifier(pretrained=True).to(DEVICE)
-    criterion = nn.CrossEntropyLoss()
+    class_counts = np.bincount(IDNetDataset(PROCESSED_DIR / "train.csv", TRAIN_TF).df["label"])
+    weights = 1.0 / torch.tensor(class_counts, dtype=torch.float32)
+
+    criterion = nn.CrossEntropyLoss(weight=weights.to(DEVICE))
     best_auroc = 0.0
 
     print(f"\n[START] Entraînement sur {DEVICE} | Workers: {workers}")
     print(f"[INFO] Tracking vers: {tracking_uri}\n")
-
+    run_id = None
     try:
-        with mlflow.start_run() as run:
+        with mlflow.start_run(run_name="training") as run:
             run_id = run.info.run_id
 
-            # 🔥 tags contextuels (IMMÉDIATEMENT)
+            # tags contextuels
             mlflow.set_tag("retrain_reason", os.getenv("REASON", "manual"))
             mlflow.set_tag("pipeline", "training")
             mlflow.set_tag("trigger", "github_actions")
@@ -165,24 +211,36 @@ def train():
                     # 1. Sauvegarde locale (survit au crash réseau)
                     torch.save(model.state_dict(), "best_model_checkpoint.pt")
 
-                    # 2. MLflow
-                    try:
-                        mlflow.pytorch.log_model(model, artifact_path="model")
-                        print(f"  ⭐ Record Sauvegardé : {best_auroc:.4f}")
-
-                    except Exception as e:
-
-                        print(f"  ⚠️ Erreur upload MLflow (Backup local OK) : {e}")
-
             print("\n--- Calcul du seuil optimal (Target Recall: 95%) ---")
 
-            y_true, y_score = load_scores(PROCESSED_DIR / "val.csv")
-
-            optimal_threshold = find_threshold_for_recall(y_true, y_score, target_recall=0.95)
-
             # On enregistre dans MLflow
-            mlflow.log_param("optimal_threshold", optimal_threshold)
-            print(f"✅ Seuil optimal enregistré : {optimal_threshold}")
+
+            best_model = FraudClassifier(pretrained=False).to(DEVICE)
+            best_model.load_state_dict(torch.load("best_model_checkpoint.pt"))
+            best_model.eval()
+
+            #  Calcul LOCAL du threshold
+            y_true, y_score = get_model_scores(best_model, val_dl)
+
+            optimal_threshold = find_threshold_for_recall(
+                y_true,
+                y_score,
+                target_recall=0.95,
+            )
+            # Logging MLflow
+            mlflow.pytorch.log_model(
+                best_model,
+                artifact_path="model",
+                pip_requirements="requirements.txt",
+            )
+
+            mlflow.log_artifact("best_model_checkpoint.pt", artifact_path="model")
+
+            mlflow.log_metric("optimal_threshold", optimal_threshold)
+            mlflow.log_metric("best_val_auroc", best_auroc)
+            mlflow.set_tag("optimal_threshold", str(optimal_threshold))
+            print("✅ Modèle loggé avec code embarqué")
+            print(f"✅ Seuil optimal enregistré : {optimal_threshold}", flush=True)
 
     except KeyboardInterrupt:
         print(
@@ -190,6 +248,7 @@ def train():
         )
     finally:
         mlflow.end_run()
+    print("TRACKING URI =", mlflow.get_tracking_uri())
     return run_id
 
 
