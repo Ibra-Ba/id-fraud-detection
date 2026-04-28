@@ -69,7 +69,9 @@ def load_data(csv_path: Path) -> pd.DataFrame:
     return df
 
 
-def load_reference_from_mlflow(model_name: str, alias: str = "champion") -> pd.DataFrame:
+def load_reference_from_mlflow(
+    model_name: str, alias: str = "champion"
+) -> tuple[pd.DataFrame, str]:
     logger.info(f"Loading reference dataset from MLflow ({model_name}@{alias})")
 
     client = MlflowClient()
@@ -93,7 +95,7 @@ def load_reference_from_mlflow(model_name: str, alias: str = "champion") -> pd.D
     df = pd.read_csv(path)
 
     logger.info(f"Reference dataset loaded ({len(df)} rows)")
-    return df
+    return df, mv.version
 
 
 def load_s3_predictions(prefix: str) -> pd.DataFrame:
@@ -249,9 +251,12 @@ def run_monitoring(
     logger.info("── Monitoring started ─────────────────────")
     if ref_path:
         ref = load_data(ref_path)
+        ref_version = None
     else:
         logger.info("Loading reference from MLflow")
-        ref = load_reference_from_mlflow(os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector"))
+        ref, ref_version = load_reference_from_mlflow(
+            os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector")
+        )
 
     if s3_prefix:
         logger.info("Mode: S3")
@@ -292,6 +297,10 @@ def run_monitoring(
     mlflow.set_experiment("fraud-detection-monitoring")
 
     with mlflow.start_run(run_name="monitoring"):
+
+        mlflow.set_tag("model_name", os.getenv("MLFLOW_MODEL_NAME"))
+        mlflow.set_tag("model_version", ref_version)
+
         mlflow.log_metrics(
             {
                 **metrics,

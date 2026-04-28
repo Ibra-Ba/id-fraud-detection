@@ -11,7 +11,6 @@ import logging
 import os
 import time
 from datetime import datetime
-from pathlib import Path
 
 import boto3
 import mlflow
@@ -25,7 +24,6 @@ from torch.utils.data import DataLoader
 
 from src.data.dataset import VAL_TF, IDNetDataset
 from src.models.config import BATCH_SIZE, DEVICE
-from src.models.efficientnet import FraudClassifier
 
 # Logging config
 
@@ -39,12 +37,10 @@ s3 = boto3.client("s3")
 
 
 def get_champion_threshold() -> float:
-    """Lit le threshold optimal depuis MLflow Registry via l'alias 'champion'."""
-
     uri = os.getenv("MLFLOW_TRACKING_URI")
     if not uri:
-        logger.warning("MLFLOW_TRACKING_URI non défini, seuil par défaut 0.5")
-        return 0.5
+        logger.warning("MLFLOW_TRACKING_URI non défini, seuil par défaut 0.25")
+        return 0.25
 
     mlflow.set_tracking_uri(uri)
     client = MlflowClient()
@@ -52,38 +48,44 @@ def get_champion_threshold() -> float:
 
     try:
         mv = client.get_model_version_by_alias(model_name, "champion")
-        threshold = float(mv.tags.get("optimal_threshold", 0.5))
-        logger.info(f"🎯 Seuil 'champion' récupéré (V{mv.version}) : {threshold}")
+
+        threshold = float(mv.tags.get("deployment_threshold", 0.25))
+
+        logger.info(f"🎯 Threshold (deployment) récupéré " f"(V{mv.version}) : {threshold}")
         return threshold
+
     except Exception as e:
         logger.error(f"❌ Impossible de récupérer le seuil : {e}")
-        return 0.5
+        return 0.25
 
 
 # Load model
 
 
 def load_model():
+    """Charge le modèle champion depuis MLflow avec vérification stricte de l'URI."""
     import mlflow.pytorch
 
-    checkpoint = Path("best_model_checkpoint.pt")
+    uri = os.getenv("MLFLOW_TRACKING_URI")
+    model_name = os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector")
+    if not uri:
+        logger.error("❌ MLFLOW_TRACKING_URI n'est pas définie dans le .env. Arrêt du script.")
+        exit(1)
 
-    if checkpoint.exists():
-        logger.info("Loading model from local checkpoint...")
-        model = FraudClassifier(pretrained=False)
-        model.load_state_dict(torch.load(checkpoint, map_location=DEVICE))
-    else:
-        logger.info("Loading model from MLflow (champion)...")
+    try:
+        mlflow.set_tracking_uri(uri)
+        logger.info(f"🏆 Chargement du modèle champion '{model_name}' depuis {uri}")
 
-        uri = os.getenv("MLFLOW_TRACKING_URI")
-        if uri:
-            mlflow.set_tracking_uri(uri)
-
-        model_name = os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector")
         model = mlflow.pytorch.load_model(f"models:/{model_name}@champion")
 
-    model = model.to(DEVICE)
-    model.eval()
+        model.eval()
+        model.to(DEVICE)
+        logger.info("✅ Modèle chargé avec succès")
+        return model
+
+    except Exception as e:
+        logger.error(f"❌ Impossible de charger le modèle champion : {e}")
+        exit(1)
     return model
 
 

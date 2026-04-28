@@ -150,10 +150,14 @@ def train():
     )
 
     model = FraudClassifier(pretrained=True).to(DEVICE)
+    # compute class counts une fois
     class_counts = np.bincount(IDNetDataset(PROCESSED_DIR / "train.csv", TRAIN_TF).df["label"])
-    weights = 1.0 / torch.tensor(class_counts, dtype=torch.float32)
+    freq = class_counts / class_counts.sum()
 
-    criterion = nn.CrossEntropyLoss(weight=weights.to(DEVICE))
+    weights = 1.0 / np.sqrt(freq)
+    weights = torch.tensor(weights, dtype=torch.float32).to(DEVICE)
+
+    criterion = nn.CrossEntropyLoss(weight=weights)
     best_auroc = 0.0
 
     print(f"\n[START] Entraînement sur {DEVICE} | Workers: {workers}")
@@ -170,6 +174,9 @@ def train():
 
             mlflow.log_params({"model": "efficientnet_b0", "batch_size": BATCH_SIZE})
 
+            # Early Stopping
+            patience = 3
+            patience_counter = 0
             for epoch in range(1, TOTAL_EPOCHS + 1):
                 # --- GESTION DES PHASES ---
                 if epoch == 1:
@@ -182,9 +189,11 @@ def train():
                 elif epoch == FREEZE_EPOCHS + 1:
                     print(f"\n--- Phase 2: Fine-tuning Partiel (LR={LR_FINETUNE}) ---")
                     # OPTIMISATION : On ne dégel que les blocs 6 et 7 pour la vitesse CPU
+                    # Phase 2 : dégel un peu plus profond
                     for name, param in model.backbone.named_parameters():
                         param.requires_grad = any(
-                            x in name for x in ["blocks.6", "blocks.7", "classifier"]
+                            x in name
+                            for x in ["blocks.4", "blocks.5", "blocks.6", "blocks.7", "classifier"]
                         )
                     optimizer = torch.optim.Adam(
                         filter(lambda p: p.requires_grad, model.parameters()), lr=LR_FINETUNE
@@ -204,12 +213,19 @@ def train():
                     f"Epoch {epoch:02d} | Train AUROC: {tr_auroc:.4f} | Val AUROC: {vl_auroc:.4f}"
                 )
 
-                # --- SAUVEGARDE SÉCURISÉE ---
+                # --- SAUVEGARDE + EARLY STOPPING ---
+
                 if vl_auroc > best_auroc:
                     best_auroc = vl_auroc
-
-                    # 1. Sauvegarde locale (survit au crash réseau)
                     torch.save(model.state_dict(), "best_model_checkpoint.pt")
+                    patience_counter = 0  # reset
+                else:
+                    patience_counter += 1
+                    print(f"⏳ Early stopping patience: {patience_counter}/{patience}")
+
+                    if patience_counter >= patience:
+                        print("⏹ Early stopping déclenché")
+                        break
 
             print("\n--- Calcul du seuil optimal (Target Recall: 95%) ---")
 
@@ -227,6 +243,21 @@ def train():
                 y_score,
                 target_recall=0.95,
             )
+
+            # Print for debugging
+            # 🔍 DEBUG distribution des scores
+            fraud_scores = y_score[y_true == 1]
+            genuine_scores = y_score[y_true == 0]
+
+            print("\n--- DEBUG SCORES DISTRIBUTION ---")
+            print(f"Fraud mean     : {fraud_scores.mean():.4f}")
+            print(f"Fraud min/max  : {fraud_scores.min():.4f} / {fraud_scores.max():.4f}")
+            print(f"Genuine mean   : {genuine_scores.mean():.4f}")
+            print(f"Genuine min/max: {genuine_scores.min():.4f} / {genuine_scores.max():.4f}")
+
+            print(f"Percentile 90 fraud : {np.percentile(fraud_scores, 90):.4f}")
+            print(f"Percentile 10 fraud : {np.percentile(fraud_scores, 10):.4f}")
+
             # Logging MLflow
             mlflow.pytorch.log_model(
                 best_model,
@@ -238,6 +269,7 @@ def train():
 
             mlflow.log_metric("optimal_threshold", optimal_threshold)
             mlflow.log_metric("best_val_auroc", best_auroc)
+            mlflow.log_metric("max_recall_possible", y_score[y_true == 1].min())
             mlflow.set_tag("optimal_threshold", str(optimal_threshold))
             print("✅ Modèle loggé avec code embarqué")
             print(f"✅ Seuil optimal enregistré : {optimal_threshold}", flush=True)
