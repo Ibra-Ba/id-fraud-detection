@@ -23,6 +23,8 @@ TRAIN_TF = A.Compose(
         A.Perspective(p=0.2),
         A.GaussNoise(p=0.2),
         A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+        A.MotionBlur(p=0.2),
+        A.ImageCompression(quality_lower=70, quality_upper=100, p=0.3),
         ToTensorV2(),
     ]
 )

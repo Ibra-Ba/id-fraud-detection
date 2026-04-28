@@ -54,15 +54,23 @@ def register_and_promote(run_id, model_name="IDNet-Fraud-Detector", threshold=No
     print(f"--- Début de la publication du modèle : {model_name} ---")
 
     # 1. Enregistrement initial (Création de la version)
+
     model_uri = f"runs:/{run_id}/model"
     print(f"[1/3] Enregistrement du run {run_id}...")
+
     mv = mlflow.register_model(model_uri, model_name)
     version = mv.version
+
+    # récupérer threshold depuis le run
+    run = client.get_run(run_id)
+    threshold = run.data.metrics.get("optimal_threshold")
+
+    if threshold is not None:
+        client.set_model_version_tag(model_name, version, "optimal_threshold", str(threshold))
 
     # 2. Ajout des Tags
     print(f"[2/3] Ajout des tags à la V{version}...")
     client.set_model_version_tag(model_name, version, "optimal_threshold", str(threshold))
-    client.set_model_version_tag(model_name, version, "deployment_status", "validated")
     client.set_model_version_tag(model_name, version, "origin", "wsl2_training")
 
     # 3. Promotion via Alias (Champion)
@@ -80,5 +88,5 @@ def register_and_promote(run_id, model_name="IDNet-Fraud-Detector", threshold=No
 if __name__ == "__main__":
     # Remplacer par le vrai RUN_ID après un entraînement
     # Si threshold=None, threshod dans MLflow sera utilisé.
-    RUN_ID = "f80965bd7ba241acb90e6eb57a356fb0"
+    RUN_ID = "7985417af4cf4a41850535ed3846bf82"
     register_and_promote(RUN_ID, threshold=None)

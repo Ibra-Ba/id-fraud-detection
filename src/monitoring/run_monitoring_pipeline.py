@@ -10,7 +10,7 @@ Orchestre dans l'ordre :
 
 Usage:
     python -m src.monitoring.run_monitoring_pipeline
-    python -m src.monitoring.run_monitoring_pipeline --target-recall 0.95
+    python -m src.monitoring.run_monitoring_pipeline --target-recall 0.90
     python -m src.monitoring.run_monitoring_pipeline --skip-generate
 """
 
@@ -84,32 +84,12 @@ def step_log_reference():
     logger.info(f"✅ Référence loggée sur run {run_id}")
 
 
-def step_simulate_threshold(target_recall: float) -> float:
-    """Étape 4 — Recalcule le seuil optimal et met à jour MLflow."""
-
+def step_simulate_threshold(target_recall: float):
     logger.info("── Étape 4/5 : Simulation seuil optimal ────────────────────")
 
-    df = simulate(target_recall=target_recall)
-    rec = df[df["fraud_recall"] >= target_recall]
+    simulate(target_recall=target_recall)
 
-    if rec.empty:
-        logger.warning(f"Recall {target_recall:.0%} inatteignable — seuil conservé")
-        return float(df.iloc[-1]["threshold"])
-
-    best = rec.loc[rec["fraud_precision"].idxmax()]
-    new_threshold = float(best["threshold"])
-
-    logger.info(f"Nouveau seuil : {new_threshold} (recall={best['fraud_recall']:.2%})")
-
-    # Met à jour le tag MLflow
-    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))  # type: ignore
-    client = MlflowClient()
-    model_name = os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector")
-    mv = client.get_model_version_by_alias(model_name, "champion")
-    client.set_model_version_tag(model_name, mv.version, "optimal_threshold", str(new_threshold))
-    logger.info(f"✅ Tag optimal_threshold={new_threshold} mis à jour sur v{mv.version}")
-
-    return new_threshold
+    logger.info("✅ Threshold recalculé et loggé dans MLflow")
 
 
 def step_monitor(log_mlflow: bool = True) -> dict:
@@ -126,7 +106,7 @@ def step_monitor(log_mlflow: bool = True) -> dict:
 
 
 def run_pipeline(
-    target_recall: float = 0.95,
+    target_recall: float = 0.90,
     skip_generate: bool = False,
     log_mlflow: bool = True,
 ):
@@ -190,8 +170,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--target-recall",
         type=float,
-        default=0.95,
-        help="Recall fraud minimum (défaut: 0.95)",
+        default=0.90,
+        help="Recall fraud minimum (défaut: 0.90)",
     )
     parser.add_argument(
         "--skip-generate",

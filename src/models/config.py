@@ -21,9 +21,9 @@ NUM_WORKERS = 0  # obligatoire sous WSL2 (pas de fork multiprocessing)
 # ─── Hyperparamètres ──────────────────────────────────────────────────────────
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", 16))
 FREEZE_EPOCHS = int(os.getenv("FREEZE_EPOCHS", 3))
-TOTAL_EPOCHS = int(os.getenv("TOTAL_EPOCHS", 10))
+TOTAL_EPOCHS = int(os.getenv("TOTAL_EPOCHS", 25))
 LR_HEAD = float(os.getenv("LR_HEAD", 1e-3))
-LR_FINETUNE = float(os.getenv("LR_FINETUNE", 1e-4))
+LR_FINETUNE = float(os.getenv("LR_FINETUNE", 3e-5))
 IMG_SIZE = (IMAGE_SIZE, IMAGE_SIZE)  # tuple pour Albumentations / torchvision
 
 # ─── Quality gates ────────────────────────────────────────────────────────────

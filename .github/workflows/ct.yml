@@ -110,6 +110,10 @@ jobs:
               f.write(f"promoted={promoted}\n")
               f.write(f"new_version={new_version}\n")
           EOF
+      - name: Compute deployment threshold (champion)
+        if: steps.promote.outputs.promoted == 'true'
+        run: |
+          python -m src.models.simulate_threshold --source mlflow
 
   # ─── Job 2 : Déploiement si promu ─────────────────────────────────────────
   deploy:
