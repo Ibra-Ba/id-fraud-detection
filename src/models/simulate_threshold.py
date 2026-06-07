@@ -1,9 +1,20 @@
 """
-Simulation de l'impact du seuil sur recall/precision.
+Simulation du seuil optimal — IDNet Fraud Detector Bac+5
+
+Recalcule le seuil optimal (recall >= target) depuis les prédictions
+du champion MLflow et le logue dans l'expérience de monitoring.
+
+Cohérence Bac+4 :
+  - Même logique que find_optimal_threshold() dans train.py :
+    precision_recall_curve + contrainte recall >= target_recall
+  - Lit optimal_threshold depuis metrics en priorité, tags en fallback
+  - Écrit le résultat dans MLflow (expérience monitoring, pas le run champion)
 
 Usage:
     python -m src.models.simulate_threshold
-    python -m src.models.simulate_threshold --target-recall 0.90
+    python -m src.models.simulate_threshold --target-recall 0.95
+    python -m src.models.simulate_threshold --source mlflow
+    python -m src.models.simulate_threshold --source csv --csv-path data/processed/val.csv
 """
 
 import argparse
@@ -11,255 +22,255 @@ import logging
 import os
 from pathlib import Path
 
+import mlflow
 import numpy as np
 import pandas as pd
-import torch
 from dotenv import load_dotenv
-from sklearn.metrics import classification_report, precision_recall_curve
-from torch.utils.data import DataLoader
-
-from src.data.dataset import VAL_TF, IDNetDataset
-from src.models.config import BATCH_SIZE, DEVICE, PROCESSED_DIR
-from src.models.efficientnet import FraudClassifier
+from mlflow.tracking import MlflowClient
+from sklearn.metrics import precision_recall_curve
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-def apply_temperature_scaling(logits, temperature=1.5):
-    return logits / temperature
-
-
-def load_scores(csv_path: Path, source="mlflow") -> tuple[np.ndarray, np.ndarray]:
-    """Charge le modèle (local ou MLflow) et calcule les scores."""
-    import mlflow.pytorch
-
-    # ── Load model ─────────────────────────────────────────────
-    try:
-        if source == "local":
-            checkpoint = Path("best_model_checkpoint.pt")
-            print("[INFO] Loading model from local checkpoint")
-            model = FraudClassifier(pretrained=False)
-            model.load_state_dict(torch.load(str(checkpoint), map_location=DEVICE))
-
-        else:
-            print("[INFO] Loading model from MLflow (Champion)")
-            mlflow.set_tracking_uri(os.environ["MLFLOW_TRACKING_URI"])
-            model_name = os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector")
-            model = mlflow.pytorch.load_model(f"models:/{model_name}@champion")
-
-        model = model.to(DEVICE)
-        model.eval()
-
-    except KeyError as e:
-        print(f"[ERROR] Variable d'environnement manquante : {e}")
-        raise
-    except Exception as e:
-        print(f"[ERROR] Impossible de charger le modèle ({source}) : {e}")
-        raise
-
-    # ── Data ───────────────────────────────────────────────────
-    loader = DataLoader(
-        IDNetDataset(csv_path, VAL_TF),
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=0,
-    )
-
-    # ── Inference ──────────────────────────────────────────────
-    all_probs, all_labels = [], []
-
-    with torch.no_grad():
-        for images, labels in loader:
-            logits = model(images.to(DEVICE))
-            # 🔥 calibration
-            temperature = 1.5
-            logits = logits / temperature
-            probs = torch.softmax(logits, dim=1)[:, 1]
-            all_probs.extend(probs.cpu().numpy())
-            all_labels.extend(labels.numpy())
-
-    return np.array(all_labels), np.array(all_probs)
+# ── Constantes ────────────────────────────────────────────────────────────────
+MODEL_NAME = os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector")
+MONITORING_EXPERIMENT = "idnet-monitoring"
+TARGET_RECALL_DEFAULT = 0.95
 
 
-def find_threshold_for_recall(
+# ── Calcul du seuil ───────────────────────────────────────────────────────────
+
+
+def find_optimal_threshold(
     y_true: np.ndarray,
     y_score: np.ndarray,
-    target_recall: float = 0.90,
-) -> float:
+    target_recall: float = TARGET_RECALL_DEFAULT,
+) -> dict:
     """
-    Trouve le seuil le plus élevé qui garantit recall >= target_recall.
-    Maximise la precision sous contrainte de recall minimum.
+    Seuil maximisant la précision sous contrainte recall >= target_recall.
+    Logique identique à train.py Bac+4.
+
+    Retourne un dict avec threshold, precision, recall atteints.
     """
     precisions, recalls, thresholds = precision_recall_curve(y_true, y_score)
 
+    # precision_recall_curve retourne n+1 points, thresholds a n valeurs
     valid = [
         (p, r, t)
-        for p, r, t in zip(precisions, recalls, thresholds)  # noqa: B905
+        for p, r, t in zip(precisions[:-1], recalls[:-1], thresholds, strict=False)
         if r >= target_recall
     ]
 
     if not valid:
         logger.warning(
-            f"Impossible d'atteindre recall={target_recall:.2f} — " "utilise le seuil minimal"
+            f"Recall cible {target_recall:.0%} inatteignable — "
+            f"recall max disponible : {recalls.max():.4f}. "
+            f"Seuil minimal retourné."
         )
-        return float(thresholds[0])
+        return {
+            "threshold": float(thresholds[0]),
+            "precision": float(precisions[0]),
+            "recall": float(recalls[0]),
+            "target_recall": target_recall,
+            "target_reached": False,
+        }
 
-    # Parmi les seuils valides, prend celui avec la meilleure precision
-    best = max(valid, key=lambda x: x[0])
+    best_precision, best_recall, best_threshold = max(valid, key=lambda x: x[0])
     logger.info(
-        f"Seuil optimal pour recall>={target_recall:.2f} : "
-        f"{best[2]:.4f} (precision={best[0]:.4f}, recall={best[1]:.4f})"
+        f"Seuil optimal : {best_threshold:.4f} "
+        f"(precision={best_precision:.4f}, recall={best_recall:.4f})"
     )
-    return float(best[2])
+    return {
+        "threshold": float(best_threshold),
+        "precision": float(best_precision),
+        "recall": float(best_recall),
+        "target_recall": target_recall,
+        "target_reached": True,
+    }
 
 
-def simulate(
-    y_true: np.ndarray,
-    y_score: np.ndarray,
-    thresholds: list[float],
-) -> pd.DataFrame:
-    """Simule les métriques pour chaque seuil."""
-    rows = []
-    for t in thresholds:
-        preds = (y_score >= t).astype(int)
-        report = classification_report(
-            y_true,
-            preds,
-            target_names=["genuine", "fraud"],
-            output_dict=True,
-            zero_division=0,
-        )
-
-        # Calculer les compteurs brute
-        # (y_true == 1) & (preds == 0) crée un tableau de Booléens
-        # .sum() compte les True
-        n_missed = np.sum((y_true == 1) & (preds == 0))
-        n_alarms = np.sum((y_true == 0) & (preds == 1))
-
-        rows.append(
-            {
-                "threshold": round(t, 4),
-                "fraud_recall": round(report["fraud"]["recall"], 4),  # type: ignore
-                "fraud_precision": round(report["fraud"]["precision"], 4),  # type: ignore
-                "fraud_f1": round(report["fraud"]["f1-score"], 4),  # type: ignore
-                "genuine_recall": round(report["genuine"]["recall"], 4),  # type: ignore
-                "accuracy": round(report["accuracy"], 4),  # type: ignore
-                "n_fraud_missed": int(n_missed),
-                "n_false_alarms": int(n_alarms),
-            }
-        )
-    return pd.DataFrame(rows)
+# ── Sources de données ────────────────────────────────────────────────────────
 
 
-def main(target_recall: float = 0.90, csv_path: Path | None = None, source="mlflow"):  # noqa: UP045
-    csv_path = csv_path or (PROCESSED_DIR / "test.csv")
+def load_from_mlflow_artifacts(client: MlflowClient, run_id: str) -> pd.DataFrame:
+    """Charge train_with_preds.csv depuis les artifacts MLflow du champion."""
+    import tempfile
 
-    logger.info(f"Chargement des scores depuis {csv_path}...")
-    y_true, y_score = load_scores(csv_path, source=source)
-    logger.info(f"{len(y_true)} échantillons | fraud_rate={y_true.mean():.2%}")
+    tmp_dir = tempfile.mkdtemp()
+    try:
+        client.download_artifacts(run_id, "reference_data/train_with_preds.csv", tmp_dir)
+        path = os.path.join(tmp_dir, "reference_data", "train_with_preds.csv")
+        df = pd.read_csv(path)
+        logger.info(f"Référence chargée depuis MLflow ({len(df)} lignes)")
+        return df
+    except Exception as e:
+        raise RuntimeError(f"Impossible de charger les artifacts MLflow : {e}") from e
 
-    # Grille de seuils à tester
-    thresholds = np.linspace(0.0, 1.0, 50).tolist()
 
-    # Seuil optimal pour le recall cible
-    optimal = find_threshold_for_recall(y_true, y_score, target_recall)
-    if optimal not in thresholds:
-        thresholds.append(optimal)  # type: ignore
-    thresholds = sorted(thresholds)
-
-    # Simulation
-    df = simulate(y_true, y_score, thresholds)
-    print("\n─── Simulation seuils ───────────────────────────────────────────")
-    print(df.to_string(index=False))
-
-    # Contrainte métier
-
-    MAX_FALSE_ALARMS = 200
-    MIN_RECALL = 0.90
-
-    candidates = df[(df["fraud_recall"] >= MIN_RECALL) & (df["n_false_alarms"] <= MAX_FALSE_ALARMS)]
-
-    if not candidates.empty:
-        best = candidates.loc[candidates["fraud_precision"].idxmax()]
-    else:
-        print("⚠️ Aucun seuil ne respecte les contraintes → fallback recall only")
-        best = df.loc[df["fraud_recall"].idxmax()]
-
-    print("\n─── Seuil métier recommandé ─────────────────────────")
-    print(f"threshold          : {best['threshold']}")
-    print(f"fraud_recall      : {best['fraud_recall']:.2%}")
-    print(f"fraud_precision   : {best['fraud_precision']:.2%}")
-    print(f"false_alarms      : {best['n_false_alarms']}")
-
-    print(f"\n─── Recommandation (recall fraud >= {target_recall:.0%}) ───────")
-    rec = df[df["fraud_recall"] >= target_recall]
-    if rec.empty:
-        print("⚠️  Aucun seuil n'atteint le recall cible — baisse target_recall")
-    else:
-        best = rec.loc[rec["fraud_precision"].idxmax()]
-        print(f"  Seuil recommandé  : {best['threshold']}")
-        print(f"  Fraud recall      : {best['fraud_recall']:.2%}")
-        print(f"  Fraud precision   : {best['fraud_precision']:.2%}")
-        print(f"  Fraudes manquées  : {best['n_fraud_missed']}")
-        print(f"  Fausses alertes   : {best['n_false_alarms']}")
-        print(f"  Accuracy          : {best['accuracy']:.2%}")
-        print(f"\n  → Met à jour optimal_threshold={best['threshold']} dans MLflow")
-
-    # --- LOG MLflow ---
-    import os
-
-    from mlflow.tracking import MlflowClient
-
-    client = MlflowClient()
-    model_name = os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector")
-
-    mv = client.get_model_version_by_alias(model_name, "champion")
-
-    threshold = float(best["threshold"])  # le seuil métier
-
-    client.set_model_version_tag(
-        name=model_name,
-        version=mv.version,
-        key="deployment_threshold",
-        value=str(threshold),
-    )
-
-    print(f"✅ deployment_threshold mis à jour: {threshold}")
+def load_from_csv(csv_path: str) -> pd.DataFrame:
+    """Charge un CSV local avec colonnes label + score."""
+    path = Path(csv_path)
+    if not path.exists():
+        raise FileNotFoundError(f"CSV introuvable : {path}")
+    df = pd.read_csv(path)
+    logger.info(f"CSV chargé : {path} ({len(df)} lignes)")
     return df
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+def validate_dataframe(df: pd.DataFrame) -> None:
+    """Vérifie que le DataFrame contient les colonnes requises."""
+    required = {"label", "score"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"Colonnes manquantes dans le CSV : {missing}. "
+            f"Colonnes disponibles : {list(df.columns)}"
+        )
+    if df["label"].isna().any() or df["score"].isna().any():
+        raise ValueError("Des valeurs NaN trouvées dans label ou score.")
 
+
+# ── Pipeline principal ────────────────────────────────────────────────────────
+
+
+def main(
+    target_recall: float = TARGET_RECALL_DEFAULT,
+    source: str = "mlflow",
+    csv_path: str | None = None,
+) -> dict:
+    """
+    Recalcule le seuil optimal et le logue dans MLflow monitoring.
+
+    Args:
+        target_recall: recall fraude minimum à garantir (défaut 0.95)
+        source: "mlflow" (artifacts du champion) ou "csv" (fichier local)
+        csv_path: chemin CSV si source="csv"
+
+    Returns:
+        dict avec threshold, precision, recall, target_reached
+    """
+    mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
+    client = MlflowClient()
+
+    # ── 1. Charge le champion ─────────────────────────────────────────────────
+    logger.info(f"Chargement du champion : {MODEL_NAME}@champion")
+    try:
+        mv = client.get_model_version_by_alias(MODEL_NAME, "champion")
+    except Exception as e:
+        raise RuntimeError(f"Champion introuvable dans MLflow : {e}") from e
+
+    champion_run_id = mv.run_id
+    champion_version = mv.version
+    champion_run = client.get_run(champion_run_id)
+
+    # Threshold actuel du champion (pour comparaison dans le log)
+    current_threshold = champion_run.data.metrics.get("optimal_threshold")
+    if current_threshold is None:
+        current_threshold = float(champion_run.data.tags.get("optimal_threshold", "0.5"))
+
+    logger.info(
+        f"Champion : v{champion_version} | run_id={champion_run_id} | "
+        f"threshold actuel={current_threshold:.4f}"
+    )
+
+    # ── 2. Charge les données ─────────────────────────────────────────────────
+    if source == "mlflow":
+        df = load_from_mlflow_artifacts(client, champion_run_id)
+    elif source == "csv":
+        if not csv_path:
+            raise ValueError("--csv-path requis quand --source=csv")
+        df = load_from_csv(csv_path)
+    else:
+        raise ValueError(f"Source inconnue : {source}. Valeurs valides : mlflow, csv")
+
+    validate_dataframe(df)
+
+    y_true = df["label"].astype(int).values
+    y_score = df["score"].astype(float).values
+
+    # ── 3. Calcule le seuil ───────────────────────────────────────────────────
+    result = find_optimal_threshold(y_true, y_score, target_recall)
+
+    logger.info(
+        f"Threshold recalculé : {result['threshold']:.4f} "
+        f"(était : {current_threshold:.4f}, "
+        f"delta : {result['threshold'] - current_threshold:+.4f})"
+    )
+
+    # ── 4. Logue dans MLflow (expérience monitoring, pas le run champion) ─────
+    # Clôture tout run actif pour éviter les conflits (pattern monitor_pro.py)
+    if mlflow.active_run():
+        logger.warning("Run MLflow actif détecté → fermeture")
+        mlflow.end_run()
+    os.environ.pop("MLFLOW_RUN_ID", None)
+
+    mlflow.set_experiment(MONITORING_EXPERIMENT)
+
+    with mlflow.start_run(run_name="simulate_threshold"):
+        mlflow.set_tag("model_name", MODEL_NAME)
+        mlflow.set_tag("model_version", champion_version)
+        mlflow.set_tag("champion_run_id", champion_run_id)
+        mlflow.set_tag("source", source)
+        mlflow.set_tag("target_reached", str(result["target_reached"]))
+
+        mlflow.log_metrics(
+            {
+                "optimal_threshold": result["threshold"],
+                "threshold_precision": result["precision"],
+                "threshold_recall": result["recall"],
+                "target_recall": target_recall,
+                "previous_threshold": current_threshold,
+                "threshold_delta": result["threshold"] - current_threshold,
+            }
+        )
+
+    logger.info("Threshold loggué dans MLflow (expérience monitoring)")
+
+    if not result["target_reached"]:
+        logger.warning(
+            f"ATTENTION : recall cible {target_recall:.0%} non atteint. "
+            f"Recall obtenu : {result['recall']:.4f}. "
+            f"Vérifier la distribution des données."
+        )
+
+    return result
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Recalcule le seuil optimal du champion IDNet")
     parser.add_argument(
         "--target-recall",
         type=float,
-        default=0.90,
-        help="Recall fraud minimum souhaité (défaut: 0.90)",
+        default=TARGET_RECALL_DEFAULT,
+        help=f"Recall fraude minimum (défaut: {TARGET_RECALL_DEFAULT})",
     )
-
-    parser.add_argument(
-        "--csv",
-        type=str,
-        default=None,
-        help="CSV à évaluer (défaut: test.csv)",
-    )
-
     parser.add_argument(
         "--source",
-        type=str,
-        choices=["mlflow", "local"],
+        choices=["mlflow", "csv"],
         default="mlflow",
-        help="Source du modèle (mlflow ou local). Défaut: mlflow",
+        help="Source des données : mlflow (artifacts champion) ou csv (fichier local)",
     )
-
+    parser.add_argument(
+        "--csv-path",
+        type=str,
+        default=None,
+        help="Chemin CSV si --source=csv (colonnes requises : label, score)",
+    )
     args = parser.parse_args()
 
-    main(
+    result = main(
         target_recall=args.target_recall,
-        csv_path=Path(args.csv) if args.csv else None,
         source=args.source,
+        csv_path=args.csv_path,
     )
+
+    print("\n── Résultat ─────────────────────────────────────────")
+    print(f"  threshold     : {result['threshold']:.4f}")
+    print(f"  precision     : {result['precision']:.4f}")
+    print(f"  recall        : {result['recall']:.4f}")
+    print(f"  target_recall : {result['target_recall']:.2f}")
+    print(f"  target_reached: {result['target_reached']}")

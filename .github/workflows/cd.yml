@@ -3,23 +3,270 @@ name: CD
 on:
   push:
     branches: [main]
+
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  MODEL_NAME: IDNet-Fraud-Detector
 
 jobs:
-  # ─── Job 1 : Enregistrement + Promotion MLflow ────────────────────────────
-  register-model:
-    name: Register & promote model
+  # ── Job 0 : Snapshot du champion actuel (pour rollback) ───────────────────
+  snapshot-champion:
+    name: Snapshot current champion
     runs-on: ubuntu-latest
 
     env:
       MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+
+    outputs:
+      previous_version: ${{ steps.snapshot.outputs.previous_version }}
+      previous_run_id: ${{ steps.snapshot.outputs.previous_run_id }}
+      previous_auroc: ${{ steps.snapshot.outputs.previous_auroc }}
+      previous_threshold: ${{ steps.snapshot.outputs.previous_threshold }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install MLflow
+        run: pip install mlflow boto3 psycopg2-binary
+
+      - name: Snapshot champion actuel
+        id: snapshot
+        run: |
+          python - <<'EOF'
+          import os
+          import mlflow
+          from mlflow.tracking import MlflowClient
+
+          mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
+          client = MlflowClient()
+          model_name = os.getenv("MODEL_NAME", "IDNet-Fraud-Detector")
+
+          previous_version = "none"
+          previous_run_id = "none"
+          previous_auroc = "0.0"
+          previous_threshold = "0.5"
+
+          try:
+              mv = client.get_model_version_by_alias(model_name, "champion")
+              run = client.get_run(mv.run_id)
+
+              previous_version = mv.version
+              previous_run_id = mv.run_id
+              previous_auroc = str(
+                  run.data.metrics.get("test_auroc",
+                  run.data.metrics.get("vl_auroc", 0.0))
+              )
+              # Threshold : metrics en priorité, tag en fallback
+              threshold = run.data.metrics.get("optimal_threshold")
+              if threshold is None:
+                  threshold = float(run.data.tags.get("optimal_threshold", "0.5"))
+              previous_threshold = str(threshold)
+
+              print(f"Champion actuel : v{previous_version} "
+                    f"(AUROC={previous_auroc}, threshold={previous_threshold})")
+          except Exception as e:
+              print(f"Aucun champion existant ou erreur : {e}")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"previous_version={previous_version}\n")
+              f.write(f"previous_run_id={previous_run_id}\n")
+              f.write(f"previous_auroc={previous_auroc}\n")
+              f.write(f"previous_threshold={previous_threshold}\n")
+          EOF
+
+  # ── Job 1 : Enregistrement + Promotion MLflow ─────────────────────────────
+  register-model:
+    name: Register & promote model
+    runs-on: ubuntu-latest
+    needs: snapshot-champion
+
+    env:
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
 
     outputs:
       model_version: ${{ steps.register.outputs.model_version }}
       auroc: ${{ steps.register.outputs.auroc }}
+      threshold: ${{ steps.register.outputs.threshold }}
+      promoted: ${{ steps.register.outputs.promoted }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install mlflow boto3 psycopg2-binary
+
+      - name: Register & promote champion
+        id: register
+        run: |
+          python - <<'EOF'
+          import os
+          import mlflow
+          from mlflow.tracking import MlflowClient
+
+          mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
+          client = MlflowClient()
+          model_name = os.getenv("MODEL_NAME", "IDNet-Fraud-Detector")
+
+          # ── Charge le champion par alias (pas de run_id hardcodé) ──────────
+          try:
+              mv = client.get_model_version_by_alias(model_name, "champion")
+          except Exception as e:
+              print(f"Aucun champion @champion trouvé : {e}")
+              raise
+
+          version = mv.version
+          run_id = mv.run_id
+          run = client.get_run(run_id)
+
+          auroc = run.data.metrics.get(
+              "test_auroc",
+              run.data.metrics.get("vl_auroc", 0.0)
+          )
+
+          # Threshold : metrics en priorité, tag en fallback (cohérent avec register_model.py Bac+4)
+          threshold = run.data.metrics.get("optimal_threshold")
+          if threshold is None:
+              threshold = float(run.data.tags.get("optimal_threshold", "0.5"))
+
+          print(f"Champion chargé : v{version} | run_id={run_id}")
+          print(f"AUROC={auroc:.4f} | threshold={threshold:.4f}")
+
+          # ── Tags de déploiement ───────────────────────────────────────────
+          client.set_model_version_tag(model_name, version, "deployed_by", "github_actions_cd")
+          client.set_model_version_tag(model_name, version, "deployment_status", "in_progress")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"model_version={version}\n")
+              f.write(f"auroc={auroc:.4f}\n")
+              f.write(f"threshold={threshold:.4f}\n")
+              f.write(f"promoted=true\n")
+              f.write(f"run_id={run_id}\n")
+          EOF
+
+  # ── Job 2 : Déploiement HF Space ──────────────────────────────────────────
+  deploy-hf-space:
+    name: Deploy to HF Space
+    runs-on: ubuntu-latest
+    needs: [snapshot-champion, register-model]
+
+    outputs:
+      deploy_status: ${{ steps.deploy.outputs.deploy_status }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to HF Space
+        id: deploy
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE_REPO: ${{ secrets.HF_SPACE_REPO }}
+          MODEL_VERSION: ${{ needs.register-model.outputs.model_version }}
+          AUROC: ${{ needs.register-model.outputs.auroc }}
+          THRESHOLD: ${{ needs.register-model.outputs.threshold }}
+        run: |
+          git config --global user.email "ci@github.com"
+          git config --global user.name "GitHub Actions CD"
+
+          git clone https://oauth2:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_REPO} hf_space
+          cd hf_space
+
+          cp -r ../src ./src
+          cp ../pyproject.toml .
+
+          # Injecte la version et le threshold dans un fichier de config
+          cat > deployment_info.json <<JSON
+          {
+            "model_version": "${MODEL_VERSION}",
+            "auroc": "${AUROC}",
+            "threshold": "${THRESHOLD}",
+            "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "commit": "${GITHUB_SHA}"
+          }
+          JSON
+
+          git add .
+          if git diff --cached --quiet; then
+            echo "Rien à déployer"
+            echo "deploy_status=skipped" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          git commit -m "cd: deploy v${MODEL_VERSION} (AUROC=${AUROC}, threshold=${THRESHOLD})"
+          git push
+          echo "deploy_status=success" >> $GITHUB_OUTPUT
+          echo "Space HF mis à jour"
+
+  # ── Job 3 : Tag MLflow post-déploiement ───────────────────────────────────
+  tag-deployed:
+    name: Tag model as deployed
+    runs-on: ubuntu-latest
+    needs: [register-model, deploy-hf-space]
+    if: needs.deploy-hf-space.outputs.deploy_status == 'success'
+
+    env:
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install MLflow
+        run: pip install mlflow boto3 psycopg2-binary
+
+      - name: Tag deployment_status → deployed
+        run: |
+          python - <<'EOF'
+          import os
+          import mlflow
+          from mlflow.tracking import MlflowClient
+
+          mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
+          client = MlflowClient()
+          model_name = os.getenv("MODEL_NAME", "IDNet-Fraud-Detector")
+          version = os.getenv("MODEL_VERSION")
+
+          client.set_model_version_tag(model_name, version, "deployment_status", "deployed")
+          print(f"v{version} tagué deployment_status=deployed")
+          EOF
+        env:
+          MODEL_VERSION: ${{ needs.register-model.outputs.model_version }}
+
+  # ── Job 4 : Régénération de la référence monitoring ──────────────────────
+  refresh-reference:
+    name: Refresh monitoring reference
+    runs-on: ubuntu-latest
+    needs: [register-model, deploy-hf-space]
+    if: needs.deploy-hf-space.outputs.deploy_status == 'success'
+
+    env:
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      MLFLOW_MODEL_NAME: IDNet-Fraud-Detector
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      S3_BUCKET: ${{ secrets.S3_BUCKET }}
+      DATA_PROCESSED_DIR: data/processed
 
     steps:
       - uses: actions/checkout@v4
@@ -33,12 +280,107 @@ jobs:
         run: |
           pip install -r requirements-cpu.txt
           pip install -r requirements.txt
+          pip install awscli
           pip install -e .
 
-      - name: Register & promote champion
-        id: register
+      # ── 4a : Sync données d'entraînement depuis S3 ────────────────────────
+      - name: Sync train data from S3
+        run: |
+          mkdir -p data/processed data/raw
+          aws s3 sync s3://${S3_BUCKET}/data/processed/ data/processed/ \
+            --include "train.csv" --exclude "*"
+          aws s3 sync s3://${S3_BUCKET}/data/raw/ data/raw/
+          echo "Données disponibles :"
+          ls data/processed/
+
+      # ── 4b : Génère les prédictions train_ref avec le nouveau champion ─────
+      - name: Generate train_ref predictions
+        run: |
+          python -m src.monitoring.generate_predictions \
+            --csv-path data/processed/train.csv \
+            --prefix predictions/train_ref \
+            --max-samples 500
+
+      # ── 4c : Reconstruit train_with_preds.csv et upload S3 ────────────────
+      - name: Build reference CSV
+        run: |
+          python -m src.monitoring.build_reference_csv \
+            --s3-prefix predictions/train_ref \
+            --output data/processed/train_with_preds.csv
+
+      # ── 4d : Log la référence dans MLflow (expérience monitoring) ─────────
+      - name: Log reference in MLflow monitoring
         env:
-          MLFLOW_RUN_ID: ${{ secrets.MLFLOW_RUN_ID }}
+          MODEL_VERSION: ${{ needs.register-model.outputs.model_version }}
+          AUROC: ${{ needs.register-model.outputs.auroc }}
+        run: |
+          python - <<'EOF'
+          import os
+          import mlflow
+          from mlflow.tracking import MlflowClient
+          from pathlib import Path
+
+          mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
+
+          # Clôture tout run actif
+          if mlflow.active_run():
+              mlflow.end_run()
+          os.environ.pop("MLFLOW_RUN_ID", None)
+
+          mlflow.set_experiment("idnet-monitoring")
+
+          model_version = os.getenv("MODEL_VERSION")
+          auroc = os.getenv("AUROC")
+          ref_path = Path("data/processed/train_with_preds.csv")
+
+          if not ref_path.exists():
+              raise FileNotFoundError(f"Référence introuvable : {ref_path}")
+
+          with mlflow.start_run(run_name="reference_update") as run:
+              mlflow.set_tag("reference_version", model_version)
+              mlflow.set_tag("champion_auroc", auroc)
+              mlflow.set_tag("reference_type", "train_with_preds")
+              mlflow.set_tag("model_name", os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector"))
+              mlflow.log_metric("champion_version_int", int(model_version))
+              mlflow.log_artifact(str(ref_path), artifact_path="reference_data")
+
+          print(f"Référence v{model_version} loggée dans MLflow monitoring")
+          print(f"run_id={run.info.run_id}")
+          EOF
+
+  # ── Job 6 : Rollback (déclenché si deploy ou refresh échoue) ─────────────
+  rollback:
+    name: Rollback on failure
+    runs-on: ubuntu-latest
+    needs: [snapshot-champion, register-model, deploy-hf-space, refresh-reference]
+    if: failure() && needs.snapshot-champion.outputs.previous_version != 'none'
+
+    env:
+      MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+
+    outputs:
+      rollback_done: ${{ steps.rollback-mlflow.outputs.rollback_done }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install mlflow boto3 psycopg2-binary
+
+      # ── 4a : Réaliase @champion sur la version précédente ─────────────────
+      - name: Rollback MLflow alias
+        id: rollback-mlflow
+        env:
+          PREVIOUS_VERSION: ${{ needs.snapshot-champion.outputs.previous_version }}
+          FAILED_VERSION: ${{ needs.register-model.outputs.model_version }}
         run: |
           python - <<'EOF'
           import os
@@ -47,84 +389,73 @@ jobs:
 
           mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI"))
           client = MlflowClient()
+          model_name = os.getenv("MODEL_NAME", "IDNet-Fraud-Detector")
 
-          run_id = os.getenv("MLFLOW_RUN_ID")
-          model_name = os.getenv("MLFLOW_MODEL_NAME", "IDNet-Fraud-Detector")
+          previous_version = os.getenv("PREVIOUS_VERSION")
+          failed_version = os.getenv("FAILED_VERSION", "none")
 
-          # Enregistrement
-          mv = mlflow.register_model(f"runs:/{run_id}/model", model_name)
-          version = mv.version
-          print(f"Modèle enregistré : v{version}")
+          # Réalias @champion → version précédente
+          client.set_registered_model_alias(model_name, "champion", previous_version)
+          print(f"@champion réaliasé sur v{previous_version}")
 
-          # Tags
-          client.set_model_version_tag(model_name, version, "deployed_by", "github_actions")
-          client.set_model_version_tag(model_name, version, "deployment_status", "validated")
-
-          # Récupère AUROC du run
-          run = client.get_run(run_id)
-          auroc = run.data.metrics.get("test_auroc", run.data.metrics.get("vl_auroc", 0.0))
-
-          # Compare avec le champion actuel
-          try:
-              current = client.get_model_version_by_alias(model_name, "champion")
-              current_run = client.get_run(current.run_id)
-              current_auroc = current_run.data.metrics.get(
-                  "test_auroc", current_run.data.metrics.get("vl_auroc", 0.0)
+          # Tag la version échouée
+          if failed_version and failed_version != "none":
+              client.set_model_version_tag(
+                  model_name, failed_version, "deployment_status", "rollback"
               )
-              print(f"Champion actuel : v{current.version} (AUROC={current_auroc:.4f})")
-          except Exception:
-              current_auroc = 0.0
-              print("Aucun champion existant — promotion automatique")
+              print(f"v{failed_version} tagué deployment_status=rollback")
 
-          if auroc >= current_auroc + 0.001:
-              client.set_registered_model_alias(model_name, "champion", version)
-              print(f" v{version} promu @champion (AUROC={auroc:.4f} >= {current_auroc:.4f})")
-          else:
-              print(f" v{version} non promu (AUROC={auroc:.4f} < {current_auroc:.4f})")
-
-          # Outputs pour les jobs suivants
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
-              f.write(f"model_version={version}\n")
-              f.write(f"auroc={auroc:.4f}\n")
+              f.write(f"rollback_done=true\n")
           EOF
 
-  #  Job 2 : Déploiement HF Space
-  deploy-hf-space:
-    name: Deploy to HF Space
-    runs-on: ubuntu-latest
-    needs: register-model
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Push to HF Space
+      # ── 4b : Re-push HF Space avec le code de la version précédente ───────
+      - name: Rollback HF Space
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           HF_SPACE_REPO: ${{ secrets.HF_SPACE_REPO }}
+          PREVIOUS_VERSION: ${{ needs.snapshot-champion.outputs.previous_version }}
+          PREVIOUS_AUROC: ${{ needs.snapshot-champion.outputs.previous_auroc }}
+          PREVIOUS_THRESHOLD: ${{ needs.snapshot-champion.outputs.previous_threshold }}
+          PREVIOUS_RUN_ID: ${{ needs.snapshot-champion.outputs.previous_run_id }}
         run: |
           git config --global user.email "ci@github.com"
-          git config --global user.name "GitHub Actions"
+          git config --global user.name "GitHub Actions CD Rollback"
 
-          # Clone le Space HF
           git clone https://oauth2:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE_REPO} hf_space
           cd hf_space
 
-          # Sync du code API
-          cp -r ../src ./src
-          cp ../pyproject.toml .
+          # Restaure src/ depuis le commit git correspondant au run précédent
+          # (le Space contient toujours le src/ de la dernière version déployée — on repart du repo)
+          git log --oneline -5
 
-          git add .
-          git diff --cached --quiet && echo "Rien à déployer" && exit 0
+          # Restaure le deployment_info avec les infos de la version précédente
+          cat > deployment_info.json <<JSON
+          {
+            "model_version": "${PREVIOUS_VERSION}",
+            "auroc": "${PREVIOUS_AUROC}",
+            "threshold": "${PREVIOUS_THRESHOLD}",
+            "deployed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "commit": "rollback",
+            "rollback": true
+          }
+          JSON
 
-          git commit -m "cd: deploy v${{ needs.register-model.outputs.model_version }} (AUROC=${{ needs.register-model.outputs.auroc }})"
+          git add deployment_info.json
+          if git diff --cached --quiet; then
+            echo "Space déjà à jour"
+            exit 0
+          fi
+
+          git commit -m "cd: rollback to v${PREVIOUS_VERSION} (AUROC=${PREVIOUS_AUROC})"
           git push
-          echo "✅ Space HF mis à jour"
+          echo "Rollback HF Space effectué"
 
-  # ─── Job 3 : Notification email ───────────────────────────────────────────
+  # ── Job 7 : Notification ──────────────────────────────────────────────────
   notify:
     name: Notify deployment
     runs-on: ubuntu-latest
-    needs: [register-model, deploy-hf-space]
+    needs: [snapshot-champion, register-model, deploy-hf-space, refresh-reference, rollback]
     if: always()
 
     steps:
@@ -135,17 +466,31 @@ jobs:
           server_port: 465
           username: ${{ secrets.GMAIL_USERNAME }}
           password: ${{ secrets.GMAIL_APP_PASSWORD }}
-          subject: |
-            [Id-Fraud-Sentinel] CD ${{ needs.deploy-hf-space.result == 'success' && '✅ succès' || '❌ échec' }} — v${{ needs.register-model.outputs.model_version }}
+          subject: >
+            [Id-Fraud-Sentinel] CD
+            ${{ needs.deploy-hf-space.result == 'success' && 'succes' ||
+                needs.rollback.result == 'success' && 'ROLLBACK effectue' || 'echec' }}
+            — v${{ needs.register-model.outputs.model_version }}
           to: ${{ secrets.GMAIL_USERNAME }}
           from: ${{ secrets.GMAIL_USERNAME }}
           body: |
-            Déploiement GitHub Actions terminé.
+            === Déploiement GitHub Actions ===
 
-            Modèle   : IDNet-Fraud-Detector v${{ needs.register-model.outputs.model_version }}
-            AUROC    : ${{ needs.register-model.outputs.auroc }}
-            CI       : ${{ needs.deploy-hf-space.result }}
-            Commit   : ${{ github.sha }}
-            Branche  : ${{ github.ref_name }}
+            Statut CD            : ${{ needs.deploy-hf-space.result }}
+            Référence régénérée  : ${{ needs.refresh-reference.result }}
+            Rollback             : ${{ needs.rollback.result == 'success' && 'OUI' || 'non' }}
 
-            Space HF : https://huggingface.co/spaces/${{ secrets.HF_SPACE_REPO }}
+            --- Version déployée ---
+            Modèle          : IDNet-Fraud-Detector v${{ needs.register-model.outputs.model_version }}
+            AUROC           : ${{ needs.register-model.outputs.auroc }}
+            Threshold       : ${{ needs.register-model.outputs.threshold }}
+
+            --- Version précédente (snapshot) ---
+            Version         : v${{ needs.snapshot-champion.outputs.previous_version }}
+            AUROC           : ${{ needs.snapshot-champion.outputs.previous_auroc }}
+            Threshold       : ${{ needs.snapshot-champion.outputs.previous_threshold }}
+
+            --- Contexte ---
+            Commit          : ${{ github.sha }}
+            Branche         : ${{ github.ref_name }}
+            Space HF        : https://huggingface.co/spaces/${{ secrets.HF_SPACE_REPO }}
