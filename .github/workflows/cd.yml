@@ -164,6 +164,7 @@ jobs:
     name: Deploy to HF Space
     runs-on: ubuntu-latest
     needs: [snapshot-champion, register-model]
+    if: needs.register-model.outputs.model_version != needs.snapshot-champion.outputs.previous_version
 
     outputs:
       deploy_status: ${{ steps.deploy.outputs.deploy_status }}
@@ -226,10 +227,11 @@ jobs:
       AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
 
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
-          cache: pip
 
       - name: Install MLflow
         run: pip install mlflow boto3 psycopg2-binary
@@ -256,8 +258,10 @@ jobs:
   refresh-reference:
     name: Refresh monitoring reference
     runs-on: ubuntu-latest
-    needs: [register-model, deploy-hf-space]
-    if: needs.deploy-hf-space.outputs.deploy_status == 'success'
+    needs: [snapshot-champion, register-model, deploy-hf-space]
+    if: |
+      needs.deploy-hf-space.outputs.deploy_status == 'success' &&
+      needs.register-model.outputs.model_version != needs.snapshot-champion.outputs.previous_version'
 
     env:
       MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
@@ -287,8 +291,7 @@ jobs:
       - name: Sync train data from S3
         run: |
           mkdir -p data/processed data/raw
-          aws s3 sync s3://${S3_BUCKET}/data/processed/ data/processed/ \
-            --include "train.csv" --exclude "*"
+          aws s3 cp s3://${S3_BUCKET}/data/processed/train.csv data/processed/train.csv
           aws s3 sync s3://${S3_BUCKET}/data/raw/ data/raw/
           echo "Données disponibles :"
           ls data/processed/
