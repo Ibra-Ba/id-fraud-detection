@@ -61,5 +61,8 @@
   "editor.tabSize": 4,
   "editor.insertSpaces": true,
   "editor.trimAutoWhitespace": true,
-  "files.trimTrailingWhitespace": true
+  "files.trimTrailingWhitespace": true,
+  "containers.environment": {
+    "DOCKER_HOST": "unix:///var/run/docker.sock"
+  }
 }

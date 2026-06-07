@@ -5,6 +5,9 @@ on:
     - cron: "0 6 * * *"   # tous les jours à 06h UTC
   workflow_dispatch:       # lancement manuel possible
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   monitoring:
     runs-on: ubuntu-latest
@@ -13,6 +16,7 @@ jobs:
       AUTO_RETRAIN: "1"
       GITHUB_TOKEN: ${{ secrets.GITHUB_ACCESS_TOKEN }}
       MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+      MLFLOW_MODEL_NAME: IDNet-Fraud-Detector
       AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
       AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
@@ -24,24 +28,55 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
+          cache: pip
 
       - name: Install dependencies
         run: |
           pip install -r requirements-cpu.txt
           pip install -r requirements.txt
+          pip install awscli
           pip install -e .
 
-      - name: Sync processed data from S3
+      # ── Étape 1 : Génération des prédictions ──────────────────────────────
+      # train_ref : référence (images d'entraînement Bac+4)
+      - name: Generate train_ref predictions
         run: |
-          mkdir -p data/processed
-          aws s3 sync s3://${S3_BUCKET}/data/processed/ data/processed/
-          ls data/processed/
-
-      - name: Sync raw images from S3
-        run: |
-          mkdir -p data/raw
+          aws s3 sync s3://${S3_BUCKET}/data/processed/ data/processed/ \
+            --include "train.csv" --exclude "*"
           aws s3 sync s3://${S3_BUCKET}/data/raw/ data/raw/
-          ls data/raw/
+          python -m src.monitoring.generate_predictions \
+            --csv-path data/processed/train.csv \
+            --prefix predictions/train_ref \
+            --max-samples 500
+
+      # test_run : données courantes (nouvelles inférences)
+      - name: Generate test_run predictions
+        run: |
+          aws s3 sync s3://${S3_BUCKET}/data/processed/ data/processed/ \
+            --include "test.csv" --exclude "*"
+          python -m src.monitoring.generate_predictions \
+            --csv-path data/processed/test.csv \
+            --prefix predictions/test_run \
+            --max-samples 500
+
+      # ── Étape 2 : Construction du CSV de référence ────────────────────────
+      - name: Build reference CSV
+        run: |
+          python -m src.monitoring.build_reference_csv \
+            --s3-prefix predictions/train_ref \
+            --output data/processed/train_with_preds.csv
+
+      # ── Étape 3 : Recalcul du seuil optimal ──────────────────────────────
+      - name: Simulate threshold
+        run: |
+          python -m src.models.simulate_threshold \
+            --target-recall 0.95 \
+            --source csv \
+            --csv-path data/processed/train_with_preds.csv
+
+      # ── Étape 4 : Rapport Evidently + métriques MLflow ───────────────────
       - name: Run monitoring pipeline
         run: |
-          python -m src.monitoring.run_monitoring_pipeline --skip-generate
+          python -m src.monitoring.run_monitoring_pipeline \
+            --skip-generate \
+            --target-recall 0.95
