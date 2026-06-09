@@ -37,23 +37,26 @@ jobs:
           pip install awscli
           pip install -e .
 
+      # ── Étape 0 : Sync données depuis S3 ─────────────────────────────────
+      - name: Sync data from S3
+        run: |
+          mkdir -p data/processed data/raw
+          aws s3 cp s3://${S3_BUCKET}/data/processed/train.csv data/processed/train.csv
+          aws s3 cp s3://${S3_BUCKET}/data/processed/test.csv data/processed/test.csv
+          aws s3 sync s3://${S3_BUCKET}/data/raw/ data/raw/
+          echo "Fichiers disponibles :"
+          ls data/processed/
+
       # ── Étape 1 : Génération des prédictions ──────────────────────────────
-      # train_ref : référence (images d'entraînement Bac+4)
       - name: Generate train_ref predictions
         run: |
-          aws s3 sync s3://${S3_BUCKET}/data/processed/ data/processed/ \
-            --include "train.csv" --exclude "*"
-          aws s3 sync s3://${S3_BUCKET}/data/raw/ data/raw/
           python -m src.monitoring.generate_predictions \
             --csv-path data/processed/train.csv \
             --prefix predictions/train_ref \
             --max-samples 500
 
-      # test_run : données courantes (nouvelles inférences)
       - name: Generate test_run predictions
         run: |
-          aws s3 sync s3://${S3_BUCKET}/data/processed/ data/processed/ \
-            --include "test.csv" --exclude "*"
           python -m src.monitoring.generate_predictions \
             --csv-path data/processed/test.csv \
             --prefix predictions/test_run \
