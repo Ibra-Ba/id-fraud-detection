@@ -230,9 +230,12 @@ def run(
     df = pd.read_csv(csv)
     logger.info(f"Manifest chargé : {len(df)} entrées")
 
-    if "image_path" not in df.columns:
+    # Accepte 'image_path' (standard Bac+5) ou 'path' (manifest Bac+4)
+    if "image_path" not in df.columns and "path" in df.columns:
+        df = df.rename(columns={"path": "image_path"})
+    elif "image_path" not in df.columns:
         raise ValueError(
-            f"Colonne 'image_path' manquante dans {csv_path}. "
+            f"Colonne 'image_path' ou 'path' manquante dans {csv_path}. "
             f"Colonnes disponibles : {list(df.columns)}"
         )
 
